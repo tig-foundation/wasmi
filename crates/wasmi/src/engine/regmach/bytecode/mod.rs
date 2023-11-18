@@ -2,11 +2,13 @@ mod construct;
 mod immediate;
 mod provider;
 mod utils;
+mod counts;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use self::{
+    counts::InstructionCounts,
     immediate::{AnyConst16, AnyConst32, Const16, Const32},
     provider::{Provider, ProviderSliceStack, UntypedProvider},
     utils::{

@@ -16,7 +16,7 @@ use crate::{
                 Instruction,
                 Register,
                 RegisterSpan,
-                UnaryInstr,
+                UnaryInstr, InstructionCounts,
             },
             code_map::{CodeMap, InstructionPtr},
             stack::{CallFrame, CallStack, ValueStack, ValueStackPtr},
@@ -95,9 +95,10 @@ pub fn execute_instrs<'ctx, 'engine>(
     code_map: &'engine CodeMap,
     func_types: &'engine FuncTypeRegistry,
     resource_limiter: &'ctx mut ResourceLimiterRef<'ctx>,
+    counts: &mut InstructionCounts,
 ) -> Result<WasmOutcome, TrapCode> {
     Executor::new(ctx, cache, value_stack, call_stack, code_map, func_types)
-        .execute(resource_limiter)
+        .execute(resource_limiter, counts)
 }
 
 /// An execution context for executing a `wasmi` function frame.
@@ -176,10 +177,13 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     fn execute(
         mut self,
         resource_limiter: &'ctx mut ResourceLimiterRef<'ctx>,
+        counts: &mut InstructionCounts,
     ) -> Result<WasmOutcome, TrapCode> {
         use Instruction as Instr;
         loop {
-            match *self.ip.get() {
+            let instr = self.ip.get();
+            counts.bump(instr);
+            match *instr {
                 Instr::TableIdx(_)
                 | Instr::DataSegmentIdx(_)
                 | Instr::ElementSegmentIdx(_)

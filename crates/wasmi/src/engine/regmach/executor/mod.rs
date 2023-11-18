@@ -1,5 +1,5 @@
 use self::instrs::{execute_instrs, WasmOutcome};
-use super::stack::CallFrame;
+use super::{stack::CallFrame, bytecode::InstructionCounts};
 pub use super::Stack;
 use crate::{
     engine::{
@@ -133,11 +133,13 @@ impl<'engine> EngineExecutor<'engine> {
             .map(CallFrame::instance)
             .map(InstanceCache::from)
             .expect("must have frame on the call stack");
+        let mut counts = InstructionCounts::default();
         loop {
-            match self.execute_compiled_func(ctx.as_context_mut(), &mut cache)? {
+            match self.execute_compiled_func(ctx.as_context_mut(), &mut cache, &mut counts)? {
                 WasmOutcome::Return => {
                     // In this case the root function has returned.
                     // Therefore we can return from the entire execution.
+                    println!("{counts:#?}");
                     return Ok(());
                 }
                 WasmOutcome::Call {
@@ -323,6 +325,7 @@ impl<'engine> EngineExecutor<'engine> {
         &mut self,
         ctx: StoreContextMut<T>,
         cache: &mut InstanceCache,
+        counts: &mut InstructionCounts,
     ) -> Result<WasmOutcome, Trap> {
         /// Converts a [`TrapCode`] into a [`Trap`].
         ///
@@ -348,6 +351,7 @@ impl<'engine> EngineExecutor<'engine> {
             code_map,
             func_types,
             &mut resource_limiter,
+            counts,
         )
         .map_err(make_trap)
     }
