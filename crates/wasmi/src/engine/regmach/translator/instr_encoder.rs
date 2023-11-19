@@ -7,14 +7,7 @@ use crate::{
             Instr,
         },
         regmach::{
-            bytecode::{
-                Const32,
-                Instruction,
-                Provider,
-                Register,
-                RegisterSpan,
-                RegisterSpanIter,
-            },
+            bytecode::{Const32, Instruction, Provider, Register, RegisterSpan, RegisterSpanIter},
             translator::ValueStack,
         },
         TranslationError,
