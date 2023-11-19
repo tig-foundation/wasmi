@@ -242,6 +242,16 @@ impl RegisterAlloc {
         Ok(reg)
     }
 
+    /// Returns the next dynamically allocated [`Register`].
+    pub fn peek_dynamic(&self) -> Result<Register, TranslationError> {
+        if self.next_dynamic == self.min_storage {
+            return Err(TranslationError::new(
+                TranslationErrorInner::AllocatedTooManyRegisters,
+            ));
+        }
+        Ok(Register::from_i16(self.next_dynamic))
+    }
+
     /// Allocates `n` new [`Register`] on the dynamic allocation stack and returns them.
     ///
     /// # Errors

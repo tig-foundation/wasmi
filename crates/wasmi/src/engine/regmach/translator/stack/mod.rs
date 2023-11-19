@@ -258,6 +258,11 @@ impl ValueStack {
         Ok(reg)
     }
 
+    /// Peeks the next dynamically allocated [`Register`].
+    pub fn peek_dynamic(&self) -> Result<Register, TranslationError> {
+        self.reg_alloc.peek_dynamic()
+    }
+
     /// Pops the top-most [`Provider`] from the [`ValueStack`].
     pub fn pop(&mut self) -> TypedProvider {
         self.reg_alloc.pop_provider(self.providers.pop())

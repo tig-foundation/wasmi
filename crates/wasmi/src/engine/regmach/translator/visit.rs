@@ -2213,6 +2213,13 @@ impl<'a> VisitOperator<'a> for FuncTranslator<'a> {
             TypedValue::i32_add,
             Self::no_custom_opt,
             |this, reg: Register, value: i32| {
+                if this.alloc.stack.peek_dynamic()? == reg {
+                    this.alloc
+                        .instr_encoder
+                        .push_instr(Instruction::i32_add_assign_imm(reg, value))?;
+                    this.alloc.stack.push_dynamic()?;
+                    return Ok(true);
+                }
                 if value == 0 {
                     // Optimization: `add x + 0` is same as `x`
                     this.alloc.stack.push_register(reg)?;
