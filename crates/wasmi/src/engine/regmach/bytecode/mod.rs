@@ -10,6 +10,7 @@ pub(crate) use self::{
     immediate::{AnyConst16, AnyConst32, Const16, Const32},
     provider::{Provider, ProviderSliceStack, UntypedProvider},
     utils::{
+        BinAssignInstrImm,
         BinInstr,
         BinInstrImm16,
         CallIndirectParams,

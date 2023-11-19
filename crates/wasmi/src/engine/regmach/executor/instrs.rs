@@ -9,6 +9,7 @@ use crate::{
         regmach::{
             bytecode::{
                 AnyConst32,
+                BinAssignInstrImm,
                 BinInstr,
                 BinInstrImm16,
                 Const16,
@@ -1096,6 +1097,21 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         let lhs = UntypedValue::from(<T>::from(instr.imm_in));
         let rhs = self.get_register(instr.reg_in);
         self.set_register(instr.result, op(lhs, rhs));
+        self.next_instr();
+    }
+
+    /// Executes a generic binary op-assign [`Instruction`].
+    fn execute_binary_assign_imm<T>(
+        &mut self,
+        instr: BinAssignInstrImm<T>,
+        op: fn(UntypedValue, UntypedValue) -> UntypedValue,
+    ) where
+        T: From<Const32<T>>,
+        UntypedValue: From<T>,
+    {
+        let lhs = self.get_register(instr.inout);
+        let rhs = UntypedValue::from(<T>::from(instr.value));
+        self.set_register(instr.inout, op(lhs, rhs));
         self.next_instr();
     }
 

@@ -1,5 +1,6 @@
 use super::{Const16, Const32};
 use crate::engine::{bytecode::TableIdx, func_builder::TranslationErrorInner, TranslationError};
+use core::fmt;
 
 #[cfg(doc)]
 use super::Instruction;
@@ -277,6 +278,38 @@ impl<T> BinInstrImm16<T> {
             reg_in,
             imm_in,
         }
+    }
+}
+
+/// A binary assignment instruction with an immediate input value.
+///
+/// # Note
+///
+/// Optimized for small constant values that fit into 16-bit.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct BinAssignInstrImm<T> {
+    /// The register storing the result of the computation.
+    pub inout: Register,
+    /// The immediate value to the assignment operation.
+    pub value: Const32<T>,
+}
+
+impl<T> fmt::Debug for BinAssignInstrImm<T>
+where
+    Const32<T>: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BinAssignInstrImm")
+            .field("inout", &self.inout)
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
+impl<T> BinAssignInstrImm<T> {
+    /// Creates a new [`BinAssignInstrImm`].
+    pub fn new(inout: Register, value: Const32<T>) -> Self {
+        Self { inout, value }
     }
 }
 

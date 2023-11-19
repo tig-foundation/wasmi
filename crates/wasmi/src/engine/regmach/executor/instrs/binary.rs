@@ -1,7 +1,13 @@
 use super::Executor;
 use crate::{
     core::{TrapCode, UntypedValue},
-    engine::regmach::bytecode::{BinInstr, BinInstrImm16, CopysignImmInstr, Sign},
+    engine::regmach::bytecode::{
+        BinAssignInstrImm,
+        BinInstr,
+        BinInstrImm16,
+        CopysignImmInstr,
+        Sign,
+    },
 };
 
 #[cfg(doc)]
@@ -61,6 +67,22 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         (Instruction::F64Min, execute_f64_min, UntypedValue::f64_min),
         (Instruction::F64Max, execute_f64_max, UntypedValue::f64_max),
         (Instruction::F64Copysign, execute_f64_copysign, UntypedValue::f64_copysign),
+    }
+}
+
+macro_rules! impl_binary_assign_imm {
+    ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
+        $(
+            #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
+            #[inline(always)]
+            pub fn $fn_name(&mut self, instr: BinAssignInstrImm<$ty>) {
+                self.execute_binary_assign_imm(instr, $op)
+            }
+        )*
+    };
+}
+impl<'ctx, 'engine> Executor<'ctx, 'engine> {
+    impl_binary_assign_imm! {
     }
 }
 
