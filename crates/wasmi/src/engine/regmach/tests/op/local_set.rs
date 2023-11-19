@@ -464,3 +464,25 @@ fn preserve_multiple_6() {
         ])
         .run()
 }
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn i32_add_assign_imm() {
+    let wasm = wat2wasm(
+        r#"
+        (module
+            (func (param i32) (result i32)
+                (local.get 0)
+                (i32.const 1)
+                (i32.add)
+                (local.tee 0)
+            )
+        )"#,
+    );
+    TranslationTest::new(wasm)
+        .expect_func_instrs([
+            Instruction::i32_add_assign_imm(Register::from_i16(0), 1_i32),
+            Instruction::return_reg(0),
+        ])
+        .run()
+}

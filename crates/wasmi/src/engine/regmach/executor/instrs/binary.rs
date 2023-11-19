@@ -83,6 +83,7 @@ macro_rules! impl_binary_assign_imm {
 }
 impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     impl_binary_assign_imm! {
+        (i32, Instruction::I32AddAssignImm, execute_i32_add_assign_imm, UntypedValue::i32_add),
     }
 }
 

@@ -643,6 +643,7 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
                 Instr::I64Popcnt(instr) => self.execute_i64_popcnt(instr),
                 Instr::I32Add(instr) => self.execute_i32_add(instr),
                 Instr::I32AddImm16(instr) => self.execute_i32_add_imm16(instr),
+                Instr::I32AddAssignImm(instr) => self.execute_i32_add_assign_imm(instr),
                 Instr::I32Sub(instr) => self.execute_i32_sub(instr),
                 Instr::I32SubImm16(instr) => self.execute_i32_sub_imm16(instr),
                 Instr::I32SubImm16Rev(instr) => self.execute_i32_sub_imm16_rev(instr),

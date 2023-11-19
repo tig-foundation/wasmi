@@ -7,7 +7,14 @@ use crate::{
             Instr,
         },
         regmach::{
-            bytecode::{Const32, Instruction, Provider, Register, RegisterSpan, RegisterSpanIter},
+            bytecode::{
+                Const32,
+                Instruction,
+                Provider,
+                Register,
+                RegisterSpan,
+                RegisterSpanIter,
+            },
             translator::ValueStack,
         },
         TranslationError,
@@ -620,7 +627,8 @@ impl InstrEncoder {
         value: Register,
     ) -> Result<(), TranslationError> {
         if let Some(last_instr) = self.last_instr {
-            if let Some(result) = self.instrs.get_mut(last_instr).result_mut(res) {
+            let instr = self.instrs.get_mut(last_instr);
+            if let Some(result) = instr.result_mut(res) {
                 // Case: we can replace the `result` register of the previous
                 //       instruction instead of emitting a copy instruction.
                 if *result == value {
@@ -630,6 +638,16 @@ impl InstrEncoder {
                     //       Therefore, instead of an `if` we originally had a `debug_assert`.
                     //       (Note: the spidermonkey bench test failed without this change.)
                     *result = local;
+                    if let Instruction::I32AddImm16(instr) = instr {
+                        if instr.result == instr.reg_in {
+                            let result = instr.result;
+                            let value = Const32::from(i32::from(instr.imm_in));
+                            _ = core::mem::replace(
+                                self.instrs.get_mut(last_instr),
+                                Instruction::i32_add_assign_imm(result, value),
+                            );
+                        }
+                    }
                     return Ok(());
                 }
             }

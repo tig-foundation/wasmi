@@ -1,6 +1,7 @@
 use super::{
     utils::{CopysignImmInstr, Sign},
     AnyConst32,
+    BinAssignInstrImm,
     BinInstr,
     BinInstrImm16,
     CallIndirectParams,
@@ -1173,6 +1174,11 @@ impl Instruction {
             results,
             func_type: func_type.into(),
         }
+    }
+
+    /// Creates a new [`Instruction::I32AddAssignImm`] for the given `func`.
+    pub fn i32_add_assign_imm(inout: Register, value: impl Into<Const32<i32>>) -> Self {
+        Self::I32AddAssignImm(BinAssignInstrImm::new(inout, value.into()))
     }
 
     constructor_for! {

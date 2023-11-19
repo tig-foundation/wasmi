@@ -334,6 +334,7 @@ impl VisitInputRegisters for Instruction {
             Instruction::I64Add(instr) => instr.visit_input_registers(f),
             Instruction::I32AddImm16(instr) => instr.visit_input_registers(f),
             Instruction::I64AddImm16(instr) => instr.visit_input_registers(f),
+            Instruction::I32AddAssignImm(_instr) => {},
             Instruction::I32Sub(instr) => instr.visit_input_registers(f),
             Instruction::I64Sub(instr) => instr.visit_input_registers(f),
             Instruction::I32SubImm16(instr) => instr.visit_input_registers(f),

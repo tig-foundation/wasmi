@@ -309,6 +309,7 @@ impl Instruction {
             Instruction::I64Add(instr) => instr.result_mut(),
             Instruction::I32AddImm16(instr) => instr.result_mut(),
             Instruction::I64AddImm16(instr) => instr.result_mut(),
+            Instruction::I32AddAssignImm(_instr) => None,
             Instruction::I32Sub(instr) |
             Instruction::I64Sub(instr) => instr.result_mut(),
             Instruction::I32SubImm16(instr) => instr.result_mut(),

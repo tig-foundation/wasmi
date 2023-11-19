@@ -2280,6 +2280,12 @@ pub enum Instruction {
     ///
     /// Optimized variant of [`Instruction::I32Add`] for 16-bit constant values.
     I32AddImm16(BinInstrImm16<i32>),
+    /// `i32` add-assign immediate instruction: `r0 += c0`
+    ///
+    /// # Note
+    ///
+    /// Optimized variant of [`Instruction::I32Add`] where op-assignment is possible.
+    I32AddAssignImm(BinAssignInstrImm<i32>),
     /// `i64` add (small) immediate instruction: `r0 = r1 + c0`
     ///
     /// # Note
