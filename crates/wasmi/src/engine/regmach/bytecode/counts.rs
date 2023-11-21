@@ -931,7 +931,7 @@ impl core::fmt::Debug for InstructionCounts {
         push("F64ConvertI32U", self.F64ConvertI32U);
         push("F64ConvertI64S", self.F64ConvertI64S);
         push("F64ConvertI64U", self.F64ConvertI64U);
-        buffer.sort_by(|(_ident_a, count_a), (_ident_b, count_b)| count_a.cmp(count_b));
+        buffer.sort_by(|(_ident_a, count_a), (_ident_b, count_b)| count_b.cmp(count_a));
         f.debug_map().entries(buffer).finish()
     }
 }
