@@ -13,6 +13,7 @@ use crate::{
                 BinInstr,
                 BinInstrImm16,
                 Const16,
+                Const32,
                 Instruction,
                 Register,
                 RegisterSpan,
