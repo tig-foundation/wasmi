@@ -38,6 +38,58 @@ pub struct InstructionCounts {
     BranchEqz: usize,
     BranchNez: usize,
     BranchTable: usize,
+    BranchI32Eq: usize,
+    BranchI32EqImm: usize,
+    BranchI32Ne: usize,
+    BranchI32NeImm: usize,
+    BranchI32LtS: usize,
+    BranchI32LtSImm: usize,
+    BranchI32LtU: usize,
+    BranchI32LtUImm: usize,
+    BranchI32LeS: usize,
+    BranchI32LeSImm: usize,
+    BranchI32LeU: usize,
+    BranchI32LeUImm: usize,
+    BranchI32GtS: usize,
+    BranchI32GtSImm: usize,
+    BranchI32GtU: usize,
+    BranchI32GtUImm: usize,
+    BranchI32GeS: usize,
+    BranchI32GeSImm: usize,
+    BranchI32GeU: usize,
+    BranchI32GeUImm: usize,
+    BranchI64Eq: usize,
+    BranchI64EqImm: usize,
+    BranchI64Ne: usize,
+    BranchI64NeImm: usize,
+    BranchI64LtS: usize,
+    BranchI64LtSImm: usize,
+    BranchI64LtU: usize,
+    BranchI64LtUImm: usize,
+    BranchI64LeS: usize,
+    BranchI64LeSImm: usize,
+    BranchI64LeU: usize,
+    BranchI64LeUImm: usize,
+    BranchI64GtS: usize,
+    BranchI64GtSImm: usize,
+    BranchI64GtU: usize,
+    BranchI64GtUImm: usize,
+    BranchI64GeS: usize,
+    BranchI64GeSImm: usize,
+    BranchI64GeU: usize,
+    BranchI64GeUImm: usize,
+    BranchF32Eq: usize,
+    BranchF32Ne: usize,
+    BranchF32Lt: usize,
+    BranchF32Le: usize,
+    BranchF32Gt: usize,
+    BranchF32Ge: usize,
+    BranchF64Eq: usize,
+    BranchF64Ne: usize,
+    BranchF64Lt: usize,
+    BranchF64Le: usize,
+    BranchF64Gt: usize,
+    BranchF64Ge: usize,
     Copy: usize,
     Copy2: usize,
     CopyImm32: usize,
@@ -455,6 +507,58 @@ impl core::fmt::Debug for InstructionCounts {
         push("BranchEqz", self.BranchEqz);
         push("BranchNez", self.BranchNez);
         push("BranchTable", self.BranchTable);
+        push("BranchI32Eq", self.BranchI32Eq);
+        push("BranchI32EqImm", self.BranchI32EqImm);
+        push("BranchI32Ne", self.BranchI32Ne);
+        push("BranchI32NeImm", self.BranchI32NeImm);
+        push("BranchI32LtS", self.BranchI32LtS);
+        push("BranchI32LtSImm", self.BranchI32LtSImm);
+        push("BranchI32LtU", self.BranchI32LtU);
+        push("BranchI32LtUImm", self.BranchI32LtUImm);
+        push("BranchI32LeS", self.BranchI32LeS);
+        push("BranchI32LeSImm", self.BranchI32LeSImm);
+        push("BranchI32LeU", self.BranchI32LeU);
+        push("BranchI32LeUImm", self.BranchI32LeUImm);
+        push("BranchI32GtS", self.BranchI32GtS);
+        push("BranchI32GtSImm", self.BranchI32GtSImm);
+        push("BranchI32GtU", self.BranchI32GtU);
+        push("BranchI32GtUImm", self.BranchI32GtUImm);
+        push("BranchI32GeS", self.BranchI32GeS);
+        push("BranchI32GeSImm", self.BranchI32GeSImm);
+        push("BranchI32GeU", self.BranchI32GeU);
+        push("BranchI32GeUImm", self.BranchI32GeUImm);
+        push("BranchI64Eq", self.BranchI64Eq);
+        push("BranchI64EqImm", self.BranchI64EqImm);
+        push("BranchI64Ne", self.BranchI64Ne);
+        push("BranchI64NeImm", self.BranchI64NeImm);
+        push("BranchI64LtS", self.BranchI64LtS);
+        push("BranchI64LtSImm", self.BranchI64LtSImm);
+        push("BranchI64LtU", self.BranchI64LtU);
+        push("BranchI64LtUImm", self.BranchI64LtUImm);
+        push("BranchI64LeS", self.BranchI64LeS);
+        push("BranchI64LeSImm", self.BranchI64LeSImm);
+        push("BranchI64LeU", self.BranchI64LeU);
+        push("BranchI64LeUImm", self.BranchI64LeUImm);
+        push("BranchI64GtS", self.BranchI64GtS);
+        push("BranchI64GtSImm", self.BranchI64GtSImm);
+        push("BranchI64GtU", self.BranchI64GtU);
+        push("BranchI64GtUImm", self.BranchI64GtUImm);
+        push("BranchI64GeS", self.BranchI64GeS);
+        push("BranchI64GeSImm", self.BranchI64GeSImm);
+        push("BranchI64GeU", self.BranchI64GeU);
+        push("BranchI64GeUImm", self.BranchI64GeUImm);
+        push("BranchF32Eq", self.BranchF32Eq);
+        push("BranchF32Ne", self.BranchF32Ne);
+        push("BranchF32Lt", self.BranchF32Lt);
+        push("BranchF32Le", self.BranchF32Le);
+        push("BranchF32Gt", self.BranchF32Gt);
+        push("BranchF32Ge", self.BranchF32Ge);
+        push("BranchF64Eq", self.BranchF64Eq);
+        push("BranchF64Ne", self.BranchF64Ne);
+        push("BranchF64Lt", self.BranchF64Lt);
+        push("BranchF64Le", self.BranchF64Le);
+        push("BranchF64Gt", self.BranchF64Gt);
+        push("BranchF64Ge", self.BranchF64Ge);
         push("Copy", self.Copy);
         push("Copy2", self.Copy2);
         push("CopyImm32", self.CopyImm32);
@@ -827,12 +931,8 @@ impl core::fmt::Debug for InstructionCounts {
         push("F64ConvertI32U", self.F64ConvertI32U);
         push("F64ConvertI64S", self.F64ConvertI64S);
         push("F64ConvertI64U", self.F64ConvertI64U);
-        buffer.sort_by(|(_ident_a, count_a), (_ident_b, count_b)| {
-            count_a.cmp(count_b)
-        });
-        f.debug_map()
-            .entries(buffer)
-            .finish()
+        buffer.sort_by(|(_ident_a, count_a), (_ident_b, count_b)| count_a.cmp(count_b));
+        f.debug_map().entries(buffer).finish()
     }
 }
 
@@ -874,6 +974,58 @@ impl InstructionCounts {
             Instruction::BranchEqz { .. } => self.BranchEqz += 1,
             Instruction::BranchNez { .. } => self.BranchNez += 1,
             Instruction::BranchTable { .. } => self.BranchTable += 1,
+            Instruction::BranchI32Eq { .. } => self.BranchI32Eq += 1,
+            Instruction::BranchI32EqImm { .. } => self.BranchI32EqImm += 1,
+            Instruction::BranchI32Ne { .. } => self.BranchI32Ne += 1,
+            Instruction::BranchI32NeImm { .. } => self.BranchI32NeImm += 1,
+            Instruction::BranchI32LtS { .. } => self.BranchI32LtS += 1,
+            Instruction::BranchI32LtSImm { .. } => self.BranchI32LtSImm += 1,
+            Instruction::BranchI32LtU { .. } => self.BranchI32LtU += 1,
+            Instruction::BranchI32LtUImm { .. } => self.BranchI32LtUImm += 1,
+            Instruction::BranchI32LeS { .. } => self.BranchI32LeS += 1,
+            Instruction::BranchI32LeSImm { .. } => self.BranchI32LeSImm += 1,
+            Instruction::BranchI32LeU { .. } => self.BranchI32LeU += 1,
+            Instruction::BranchI32LeUImm { .. } => self.BranchI32LeUImm += 1,
+            Instruction::BranchI32GtS { .. } => self.BranchI32GtS += 1,
+            Instruction::BranchI32GtSImm { .. } => self.BranchI32GtSImm += 1,
+            Instruction::BranchI32GtU { .. } => self.BranchI32GtU += 1,
+            Instruction::BranchI32GtUImm { .. } => self.BranchI32GtUImm += 1,
+            Instruction::BranchI32GeS { .. } => self.BranchI32GeS += 1,
+            Instruction::BranchI32GeSImm { .. } => self.BranchI32GeSImm += 1,
+            Instruction::BranchI32GeU { .. } => self.BranchI32GeU += 1,
+            Instruction::BranchI32GeUImm { .. } => self.BranchI32GeUImm += 1,
+            Instruction::BranchI64Eq { .. } => self.BranchI64Eq += 1,
+            Instruction::BranchI64EqImm { .. } => self.BranchI64EqImm += 1,
+            Instruction::BranchI64Ne { .. } => self.BranchI64Ne += 1,
+            Instruction::BranchI64NeImm { .. } => self.BranchI64NeImm += 1,
+            Instruction::BranchI64LtS { .. } => self.BranchI64LtS += 1,
+            Instruction::BranchI64LtSImm { .. } => self.BranchI64LtSImm += 1,
+            Instruction::BranchI64LtU { .. } => self.BranchI64LtU += 1,
+            Instruction::BranchI64LtUImm { .. } => self.BranchI64LtUImm += 1,
+            Instruction::BranchI64LeS { .. } => self.BranchI64LeS += 1,
+            Instruction::BranchI64LeSImm { .. } => self.BranchI64LeSImm += 1,
+            Instruction::BranchI64LeU { .. } => self.BranchI64LeU += 1,
+            Instruction::BranchI64LeUImm { .. } => self.BranchI64LeUImm += 1,
+            Instruction::BranchI64GtS { .. } => self.BranchI64GtS += 1,
+            Instruction::BranchI64GtSImm { .. } => self.BranchI64GtSImm += 1,
+            Instruction::BranchI64GtU { .. } => self.BranchI64GtU += 1,
+            Instruction::BranchI64GtUImm { .. } => self.BranchI64GtUImm += 1,
+            Instruction::BranchI64GeS { .. } => self.BranchI64GeS += 1,
+            Instruction::BranchI64GeSImm { .. } => self.BranchI64GeSImm += 1,
+            Instruction::BranchI64GeU { .. } => self.BranchI64GeU += 1,
+            Instruction::BranchI64GeUImm { .. } => self.BranchI64GeUImm += 1,
+            Instruction::BranchF32Eq { .. } => self.BranchF32Eq += 1,
+            Instruction::BranchF32Ne { .. } => self.BranchF32Ne += 1,
+            Instruction::BranchF32Lt { .. } => self.BranchF32Lt += 1,
+            Instruction::BranchF32Le { .. } => self.BranchF32Le += 1,
+            Instruction::BranchF32Gt { .. } => self.BranchF32Gt += 1,
+            Instruction::BranchF32Ge { .. } => self.BranchF32Ge += 1,
+            Instruction::BranchF64Eq { .. } => self.BranchF64Eq += 1,
+            Instruction::BranchF64Ne { .. } => self.BranchF64Ne += 1,
+            Instruction::BranchF64Lt { .. } => self.BranchF64Lt += 1,
+            Instruction::BranchF64Le { .. } => self.BranchF64Le += 1,
+            Instruction::BranchF64Gt { .. } => self.BranchF64Gt += 1,
+            Instruction::BranchF64Ge { .. } => self.BranchF64Ge += 1,
             Instruction::Copy { .. } => self.Copy += 1,
             Instruction::Copy2 { .. } => self.Copy2 += 1,
             Instruction::CopyImm32 { .. } => self.CopyImm32 += 1,

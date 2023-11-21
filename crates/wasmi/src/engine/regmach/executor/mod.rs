@@ -1,6 +1,6 @@
 use self::instrs::{execute_instrs, WasmOutcome};
-use super::{stack::CallFrame, bytecode::InstructionCounts};
 pub use super::Stack;
+use super::{bytecode::InstructionCounts, stack::CallFrame};
 use crate::{
     engine::{
         cache::InstanceCache,
