@@ -46,6 +46,7 @@ use crate::{
             Const16,
             Const32,
             Instruction,
+            Provider,
             Register,
             RegisterSpan,
             RegisterSpanIter,
@@ -1173,11 +1174,13 @@ impl FuncTranslator {
     /// Evaluates the constants and pushes the proper result to the value stack.
     fn push_binary_consteval(
         &mut self,
-        lhs: TypedValue,
-        rhs: TypedValue,
+        lhs: impl Into<TypedValue>,
+        rhs: impl Into<TypedValue>,
         consteval: fn(TypedValue, TypedValue) -> TypedValue,
     ) -> Result<(), Error> {
-        self.alloc.stack.push_const(consteval(lhs, rhs));
+        self.alloc
+            .stack
+            .push_const(consteval(lhs.into(), rhs.into()));
         Ok(())
     }
 
@@ -1337,39 +1340,39 @@ impl FuncTranslator {
         T: WasmFloat,
     {
         bail_unreachable!(self);
-        match self.alloc.stack.pop2() {
-            (TypedProvider::Register(lhs), TypedProvider::Register(rhs)) => {
+        match self.alloc.stack.pop2_as::<T>() {
+            (Provider::Register(lhs), Provider::Register(rhs)) => {
                 if make_instr_opt(self, lhs, rhs)? {
                     // Case: the custom logic applied its optimization and we can return.
                     return Ok(());
                 }
                 self.push_binary_instr(lhs, rhs, make_instr)
             }
-            (TypedProvider::Register(lhs), TypedProvider::Const(rhs)) => {
-                if make_instr_reg_imm_opt(self, lhs, T::from(rhs))? {
+            (Provider::Register(lhs), Provider::Const(rhs)) => {
+                if make_instr_reg_imm_opt(self, lhs, rhs)? {
                     // Case: the custom logic applied its optimization and we can return.
                     return Ok(());
                 }
-                if T::from(rhs).is_nan() {
+                if rhs.is_nan() {
                     // Optimization: non-canonicalized NaN propagation.
                     self.alloc.stack.push_const(rhs);
                     return Ok(());
                 }
                 self.push_binary_instr_imm(lhs, rhs, make_instr)
             }
-            (TypedProvider::Const(lhs), TypedProvider::Register(rhs)) => {
-                if make_instr_imm_reg_opt(self, T::from(lhs), rhs)? {
+            (Provider::Const(lhs), Provider::Register(rhs)) => {
+                if make_instr_imm_reg_opt(self, lhs, rhs)? {
                     // Case: the custom logic applied its optimization and we can return.
                     return Ok(());
                 }
-                if T::from(lhs).is_nan() {
+                if lhs.is_nan() {
                     // Optimization: non-canonicalized NaN propagation.
                     self.alloc.stack.push_const(lhs);
                     return Ok(());
                 }
                 self.push_binary_instr_imm_rev(lhs, rhs, make_instr)
             }
-            (TypedProvider::Const(lhs), TypedProvider::Const(rhs)) => {
+            (Provider::Const(lhs), Provider::Const(rhs)) => {
                 self.push_binary_consteval(lhs, rhs, consteval)
             }
         }
