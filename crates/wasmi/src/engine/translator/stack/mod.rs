@@ -38,6 +38,24 @@ impl TypedProvider {
         }
     }
 
+    /// Converts the [`TypedProvider`] into `Provider<T>`.
+    ///
+    /// # Panics
+    ///
+    /// If the type conversion is not possible.
+    pub fn into_typed<T>(self, consts: &FuncLocalConsts) -> Provider<T>
+    where
+        T: From<UntypedValue> + From<TypedValue>,
+    {
+        match self {
+            Provider::Register(register) => match consts.get(register) {
+                Some(value) => Provider::Const(T::from(value)),
+                None => Provider::Register(register),
+            },
+            Provider::Const(value) => Provider::Const(T::from(value)),
+        }
+    }
+
     /// Creates a new [`TypedProvider::Register`].
     pub fn register(register: impl Into<Register>) -> Self {
         Self::Register(register.into())
@@ -264,15 +282,71 @@ impl ValueStack {
         self.reg_alloc.pop_provider(self.providers.pop())
     }
 
+    /// Pops the top-most [`Provider`] from the [`ValueStack`] interpreted as `T`.
+    ///
+    /// # Note
+    ///
+    /// The additional type information allows to resolve [`Register`] referencing
+    /// function local constant values back to their value of type `T` which helps
+    /// code generation and optimization.
+    ///
+    /// # Panics
+    ///
+    /// If the type conversion is not possible.
+    pub fn pop_as<T>(&mut self) -> Provider<T>
+    where
+        T: From<UntypedValue> + From<TypedValue>,
+    {
+        self.pop().into_typed(&self.consts)
+    }
+
     /// Peeks the top-most [`Provider`] from the [`ValueStack`].
     pub fn peek(&self) -> TypedProvider {
         TypedProvider::from(self.providers.peek())
+    }
+
+    /// Peeks the top-most [`Provider`] from the [`ValueStack`] interpreted as `T`.
+    ///
+    /// # Note
+    ///
+    /// The additional type information allows to resolve [`Register`] referencing
+    /// function local constant values back to their value of type `T` which helps
+    /// code generation and optimization.
+    ///
+    /// # Panics
+    ///
+    /// If the type conversion is not possible.
+    pub fn peek_as<T>(&self) -> Provider<T>
+    where
+        T: From<UntypedValue> + From<TypedValue>,
+    {
+        self.peek().into_typed(&self.consts)
     }
 
     /// Pops the two top-most [`Provider`] from the [`ValueStack`].
     pub fn pop2(&mut self) -> (TypedProvider, TypedProvider) {
         let rhs = self.pop();
         let lhs = self.pop();
+        (lhs, rhs)
+    }
+
+    /// Pops the two top-most [`Provider`] from the [`ValueStack`] interpreted as `T`.
+    ///
+    /// # Note
+    ///
+    /// The additional type information allows to resolve [`Register`] referencing
+    /// function local constant values back to their value of type `T` which helps
+    /// code generation and optimization.
+    ///
+    /// # Panics
+    ///
+    /// If the type conversion is not possible.
+    pub fn pop2_as<T>(&mut self) -> (Provider<T>, Provider<T>)
+    where
+        T: From<UntypedValue> + From<TypedValue>,
+    {
+        let rhs = self.pop_as::<T>();
+        let lhs = self.pop_as::<T>();
         (lhs, rhs)
     }
 
