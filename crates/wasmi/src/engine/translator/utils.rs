@@ -3,15 +3,27 @@ use crate::{
     engine::bytecode::{AnyConst16, Const16, Provider, Register, RegisterSpanIter, Sign},
     Error,
 };
+use wasmi_core::UntypedValue;
+
+/// A WebAssembly primitive value type, e.g. `i32`, `u32`, `u64`, `i64`, `f32` or `f64`.
+pub trait WasmValue:
+    Copy + From<TypedValue> + Into<TypedValue> + From<UntypedValue> + Into<UntypedValue>
+{
+}
+
+impl WasmValue for u32 {}
+impl WasmValue for i32 {}
+impl WasmValue for u64 {}
+impl WasmValue for i64 {}
+impl WasmValue for f32 {}
+impl WasmValue for f64 {}
 
 /// A WebAssembly integer. Either `i32` or `i64`.
 ///
 /// # Note
 ///
 /// This trait provides some utility methods useful for translation.
-pub trait WasmInteger:
-    Copy + Eq + From<TypedValue> + Into<TypedValue> + TryInto<AnyConst16> + TryInto<Const16<Self>>
-{
+pub trait WasmInteger: WasmValue + Eq + TryInto<AnyConst16> + TryInto<Const16<Self>> {
     /// Returns the `i16` shift amount.
     ///
     /// This computes `self % bitwsize<Self>` and returns the result as `i16` value.
@@ -72,7 +84,7 @@ impl WasmInteger for u64 {
 /// # Note
 ///
 /// This trait provides some utility methods useful for translation.
-pub trait WasmFloat: Copy + Into<TypedValue> + From<TypedValue> {
+pub trait WasmFloat: WasmValue {
     /// Returns `true` if `self` is any kind of NaN value.
     fn is_nan(self) -> bool;
 
