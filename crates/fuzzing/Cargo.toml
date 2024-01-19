@@ -1,0 +1,22 @@
+[package]
+name = "wasmi_fuzzing"
+authors.workspace = true
+description = "Fuzzing infrastructure for Wasmi"
+publish = false
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+wasm-smith = "0.14"
+arbitrary = { version = "1.3", features = ["derive"] }
+wasmi-register = { package = "wasmi", path = "../wasmi" }
+wasmi-stack = { package = "wasmi", version = "=0.31.1" }
+wasmtime = "15.0"
+
+[dev-dependencies]
+wat = "1.0"
+rand = { version = "0.8", features = ["small_rng"] }
+
+[features]
