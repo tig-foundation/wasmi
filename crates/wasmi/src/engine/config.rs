@@ -39,6 +39,8 @@ pub struct Config {
     fuel_costs: FuelCosts,
     /// The mode of Wasm to Wasmi bytecode compilation.
     compilation_mode: CompilationMode,
+    /// Is `true` if Wasmi executions shall generate a runtime signature.
+    update_runtime_signature: bool,
 }
 
 /// Type storing all kinds of fuel costs of instructions.
@@ -180,6 +182,7 @@ impl Default for Config {
             consume_fuel: false,
             fuel_costs: FuelCosts::default(),
             compilation_mode: CompilationMode::default(),
+            update_runtime_signature: false,
         }
     }
 }
@@ -343,6 +346,15 @@ impl Config {
     /// [`Engine`]: crate::Engine
     pub(crate) fn get_consume_fuel(&self) -> bool {
         self.consume_fuel
+    }
+
+    pub fn update_runtime_signature(&mut self, enable: bool) -> &mut Self {
+        self.update_runtime_signature = enable;
+        self
+    }
+
+    pub(crate) fn get_update_runtime_signature(&self) -> bool {
+        self.update_runtime_signature
     }
 
     /// Returns the configured [`FuelCosts`].

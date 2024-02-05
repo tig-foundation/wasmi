@@ -5,29 +5,10 @@ use crate::{
     memory::{DataSegment, MemoryError},
     module::InstantiationError,
     table::TableError,
-    DataSegmentEntity,
-    DataSegmentIdx,
-    ElementSegment,
-    ElementSegmentEntity,
-    ElementSegmentIdx,
-    Engine,
-    Func,
-    FuncEntity,
-    FuncIdx,
-    FuncType,
-    Global,
-    GlobalEntity,
-    GlobalIdx,
-    Instance,
-    InstanceEntity,
-    InstanceIdx,
-    Memory,
-    MemoryEntity,
-    MemoryIdx,
-    ResourceLimiter,
-    Table,
-    TableEntity,
-    TableIdx,
+    DataSegmentEntity, DataSegmentIdx, ElementSegment, ElementSegmentEntity, ElementSegmentIdx,
+    Engine, Func, FuncEntity, FuncIdx, FuncType, Global, GlobalEntity, GlobalIdx, Instance,
+    InstanceEntity, InstanceIdx, Memory, MemoryEntity, MemoryIdx, ResourceLimiter, Table,
+    TableEntity, TableIdx,
 };
 use alloc::boxed::Box;
 use core::{
@@ -150,6 +131,8 @@ pub struct StoreInner {
     engine: Engine,
     /// The fuel of the [`Store`].
     fuel: Fuel,
+    /// The runtime_signature of the [`Store`].
+    runtime_signature: u64,
 }
 
 #[test]
@@ -354,6 +337,7 @@ impl StoreInner {
             elems: Arena::new(),
             extern_objects: Arena::new(),
             fuel,
+            runtime_signature: 0x97b69fcae66984bf,
         }
     }
 
@@ -828,6 +812,14 @@ impl StoreInner {
             panic!("failed to resolve stored Wasm or host function: {entity_index:?}")
         })
     }
+
+    pub fn get_runtime_signature(&self) -> u64 {
+        self.runtime_signature
+    }
+
+    pub fn set_runtime_signature(&mut self, runtime_signature: u64) {
+        self.runtime_signature = runtime_signature;
+    }
 }
 
 impl<T> Store<T> {
@@ -992,6 +984,14 @@ impl<T> Store<T> {
         self.trampolines
             .get(entity_index)
             .unwrap_or_else(|| panic!("failed to resolve stored host function: {entity_index:?}"))
+    }
+
+    pub fn get_runtime_signature(&self) -> u64 {
+        self.inner.get_runtime_signature()
+    }
+
+    pub fn set_runtime_signature(&mut self, runtime_signature: u64) {
+        self.inner.set_runtime_signature(runtime_signature);
     }
 }
 

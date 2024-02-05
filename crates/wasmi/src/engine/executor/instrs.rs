@@ -4,16 +4,8 @@ use crate::{
     core::{TrapCode, UntypedValue},
     engine::{
         bytecode::{
-            AnyConst32,
-            BinInstr,
-            BinInstrImm16,
-            BlockFuel,
-            Const16,
-            FuncIdx,
-            Instruction,
-            Register,
-            RegisterSpan,
-            UnaryInstr,
+            AnyConst32, BinInstr, BinInstrImm16, BlockFuel, Const16, FuncIdx, Instruction,
+            Register, RegisterSpan, UnaryInstr,
         },
         cache::InstanceCache,
         code_map::InstructionPtr,
@@ -22,10 +14,7 @@ use crate::{
         CodeMap,
     },
     store::ResourceLimiterRef,
-    Error,
-    Func,
-    FuncRef,
-    StoreInner,
+    Error, Func, FuncRef, StoreInner,
 };
 
 mod binary;
@@ -188,7 +177,491 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     ) -> Result<WasmOutcome, Error> {
         use Instruction as Instr;
         loop {
-            match *self.ip.get() {
+            let instr = *self.ip.get();
+            if self.ctx.engine().config().get_update_runtime_signature() {
+                // update the runtime signature with the current instruction
+                // we map the instruction to a unique 64-bit prime number
+                let instr_prime = match instr {
+                    Instr::TableIdx(_) => 0xf360371a61b48ca1,
+                    Instr::DataSegmentIdx(_) => 0xce5750f577a4a9bd,
+                    Instr::ElementSegmentIdx(_) => 0xdb013c4da009cbe9,
+                    Instr::Const32(_) => 0xe3a461c24c1edf67,
+                    Instr::I64Const32(_) => 0x93e0632ef59fbf8d,
+                    Instr::F64Const32(_) => 0xcf96777f6bf48827,
+                    Instr::Register(_) => 0xa1a9bcb9fec5fdfb,
+                    Instr::Register2(_) => 0xbee08b06e6ab17f5,
+                    Instr::Register3(_) => 0xb448b4a7d84f751f,
+                    Instr::RegisterList(_) => 0xb918e0472d8c224f,
+                    Instr::CallIndirectParams(_) => 0xbf382b4acfe7644b,
+                    Instr::CallIndirectParamsImm16(_) => 0xd853e6a184c25f0d,
+                    Instr::Trap(_) => 0xb18d650b9f5998a7,
+                    Instr::ConsumeFuel(_) => 0xe6118441cda42713,
+                    Instr::Return => 0xc8b8b1c1bcbd90e5,
+                    Instr::ReturnReg { .. } => 0xbaab8e9341e08dbf,
+                    Instr::ReturnReg2 { .. } => 0xa73d1157b48ca275,
+                    Instr::ReturnReg3 { .. } => 0xa6ffa6328ec1eb81,
+                    Instr::ReturnImm32 { .. } => 0x83307e10c33705a3,
+                    Instr::ReturnI64Imm32 { .. } => 0xe8a6034d312d2135,
+                    Instr::ReturnF64Imm32 { .. } => 0xdc28177292727dc9,
+                    Instr::ReturnSpan { .. } => 0xda75d553c9a0933b,
+                    Instr::ReturnMany { .. } => 0xa5084225f2090f95,
+                    Instr::ReturnNez { .. } => 0xe31a3fb6dd7f310d,
+                    Instr::ReturnNezReg { .. } => 0xbfd53817fb0381e7,
+                    Instr::ReturnNezReg2 { .. } => 0xd85809e11f54d745,
+                    Instr::ReturnNezImm32 { .. } => 0xddb81fb1a74a83b1,
+                    Instr::ReturnNezI64Imm32 { .. } => 0x860254a7c93ec93f,
+                    Instr::ReturnNezF64Imm32 { .. } => 0xb2ee1c9ad5f914bb,
+                    Instr::ReturnNezSpan { .. } => 0xec3158e4f69f44df,
+                    Instr::ReturnNezMany { .. } => 0xc6cdd0d8f17fe649,
+                    Instr::Branch { .. } => 0xef66bf425478625b,
+                    Instr::BranchCmpFallback { .. } => 0x87d943ccc553c97f,
+                    Instr::BranchI32And(_) => 0xf16d67d2a7dbc15b,
+                    Instr::BranchI32AndImm(_) => 0xd97e76e4a08a4169,
+                    Instr::BranchI32Or(_) => 0xac6e6dcc9eb6cbff,
+                    Instr::BranchI32OrImm(_) => 0xa36564ae5f8bcf13,
+                    Instr::BranchI32Xor(_) => 0xa3fb8b494d435729,
+                    Instr::BranchI32XorImm(_) => 0xd8a580b0d15cf0ab,
+                    Instr::BranchI32AndEqz(_) => 0xc118754f6fd4adc1,
+                    Instr::BranchI32AndEqzImm(_) => 0xa90fbb32f7b47dc7,
+                    Instr::BranchI32OrEqz(_) => 0xa1bf533d0d3f0635,
+                    Instr::BranchI32OrEqzImm(_) => 0xfe99000769fe6ddd,
+                    Instr::BranchI32XorEqz(_) => 0xe2ade8751fc2e9a3,
+                    Instr::BranchI32XorEqzImm(_) => 0xc2c831b19dd7b0d3,
+                    Instr::BranchI32Eq(_) => 0xa9504bf5d4a47f69,
+                    Instr::BranchI32EqImm(_) => 0xcc68c4fcdd5df33b,
+                    Instr::BranchI32Ne(_) => 0xc574d8a05da369d3,
+                    Instr::BranchI32NeImm(_) => 0xcad08b87db831f77,
+                    Instr::BranchI32LtS(_) => 0xc590acad04f1f7b9,
+                    Instr::BranchI32LtSImm(_) => 0xd4d918a2cfb5323d,
+                    Instr::BranchI32LtU(_) => 0xc4999a7e79065d73,
+                    Instr::BranchI32LtUImm(_) => 0xf4fbdab953a405df,
+                    Instr::BranchI32LeS(_) => 0x98a04abe0fa4ce01,
+                    Instr::BranchI32LeSImm(_) => 0xa756dc299bd21ea7,
+                    Instr::BranchI32LeU(_) => 0xebe5a83153067f95,
+                    Instr::BranchI32LeUImm(_) => 0xd6adc84185c3b835,
+                    Instr::BranchI32GtS(_) => 0xc77aef230f5cb5c1,
+                    Instr::BranchI32GtSImm(_) => 0xb288abe58caf78fd,
+                    Instr::BranchI32GtU(_) => 0xdd85783639dea14b,
+                    Instr::BranchI32GtUImm(_) => 0xc95d435e3bd01389,
+                    Instr::BranchI32GeS(_) => 0xe448369b7242bd3b,
+                    Instr::BranchI32GeSImm(_) => 0xd3ed1490c07aec79,
+                    Instr::BranchI32GeU(_) => 0xcbdfc0da7497aca9,
+                    Instr::BranchI32GeUImm(_) => 0xd01255cca5331a55,
+                    Instr::BranchI64Eq(_) => 0xd224c9cfe6c84099,
+                    Instr::BranchI64EqImm(_) => 0xb1f5e1ce9cb796ed,
+                    Instr::BranchI64Ne(_) => 0xa015db66e4480f37,
+                    Instr::BranchI64NeImm(_) => 0xc9534063141f1b6d,
+                    Instr::BranchI64LtS(_) => 0xf3c68e18c0fc1c3b,
+                    Instr::BranchI64LtSImm(_) => 0xfaadf3a5cd945423,
+                    Instr::BranchI64LtU(_) => 0xe12e4e46df02fc2f,
+                    Instr::BranchI64LtUImm(_) => 0xb3476ce898e10f3d,
+                    Instr::BranchI64LeS(_) => 0xfb1cbfc1097a9473,
+                    Instr::BranchI64LeSImm(_) => 0xb4167d6222fadaf7,
+                    Instr::BranchI64LeU(_) => 0xb2932efcea953cab,
+                    Instr::BranchI64LeUImm(_) => 0x821f8f708d1f974f,
+                    Instr::BranchI64GtS(_) => 0xde5463b08e9f4729,
+                    Instr::BranchI64GtSImm(_) => 0xd765407968c91f01,
+                    Instr::BranchI64GtU(_) => 0xe2c63c2c0678900b,
+                    Instr::BranchI64GtUImm(_) => 0xd035ff821066bb9d,
+                    Instr::BranchI64GeS(_) => 0xe49707e335868fa5,
+                    Instr::BranchI64GeSImm(_) => 0xf857874dc48a27e9,
+                    Instr::BranchI64GeU(_) => 0x8b3ce0fa63214359,
+                    Instr::BranchI64GeUImm(_) => 0x93f90f4418d24385,
+                    Instr::BranchF32Eq(_) => 0x8647b33a7b8d4ea9,
+                    Instr::BranchF32Ne(_) => 0x9efcbece1096b201,
+                    Instr::BranchF32Lt(_) => 0xb2ab8327611d4843,
+                    Instr::BranchF32Le(_) => 0xfdb94010ae03ebad,
+                    Instr::BranchF32Gt(_) => 0xc74489c6752ef2e3,
+                    Instr::BranchF32Ge(_) => 0xb2588add33b6dc8d,
+                    Instr::BranchF64Eq(_) => 0xb0f911188eef530b,
+                    Instr::BranchF64Ne(_) => 0xb3a436328722e3af,
+                    Instr::BranchF64Lt(_) => 0x996ae1e7999d71a5,
+                    Instr::BranchF64Le(_) => 0xb00795c450f79fd7,
+                    Instr::BranchF64Gt(_) => 0xfd0f65f70976783f,
+                    Instr::BranchF64Ge(_) => 0xab728f867409f623,
+                    Instr::BranchTable { .. } => 0xe2510e47b282102d,
+                    Instr::Copy { .. } => 0xf476618f2886dc2f,
+                    Instr::Copy2 { .. } => 0x81e0ef8904c1cfd5,
+                    Instr::CopyImm32 { .. } => 0xaafc797a3f40deeb,
+                    Instr::CopyI64Imm32 { .. } => 0xe6dddd163140692f,
+                    Instr::CopyF64Imm32 { .. } => 0x976bb2d6ce6f3ccf,
+                    Instr::CopySpan { .. } => 0x84f01169f85f4fff,
+                    Instr::CopySpanNonOverlapping { .. } => 0xb32e9b533c4e6e29,
+                    Instr::CopyMany { .. } => 0xe63c8f65639ebb8f,
+                    Instr::CopyManyNonOverlapping { .. } => 0xeeb9a195160ac2d7,
+                    Instr::ReturnCallInternal0 { .. } => 0xec2eb6bd5a5fc313,
+                    Instr::ReturnCallInternal { .. } => 0xb833133b9b99a663,
+                    Instr::ReturnCallImported0 { .. } => 0xe14f7c46f5f83b6b,
+                    Instr::ReturnCallImported { .. } => 0x84e5c91bee77ebb7,
+                    Instr::ReturnCallIndirect0 { .. } => 0xc5aadca828024d75,
+                    Instr::ReturnCallIndirect { .. } => 0x814db79997981ca9,
+                    Instr::CallInternal0 { .. } => 0xfbb357448a8642c3,
+                    Instr::CallInternal { .. } => 0xab093cfe38b97547,
+                    Instr::CallImported0 { .. } => 0xe866c937356994c5,
+                    Instr::CallImported { .. } => 0xa9b3f7092e7cd01b,
+                    Instr::CallIndirect0 { .. } => 0x89fdcc51af24bead,
+                    Instr::CallIndirect { .. } => 0xbda3e8601077a917,
+                    Instr::Select { .. } => 0xcab5aefcb578755f,
+                    Instr::SelectRev { .. } => 0xf0a2df16fbbb44ff,
+                    Instr::SelectImm32 { .. } => 0xe640723b1c13c87f,
+                    Instr::SelectI64Imm32 { .. } => 0xdcdfa8f4a8043ef7,
+                    Instr::SelectF64Imm32 { .. } => 0x9bbf27a9403e07e3,
+                    Instr::RefFunc { .. } => 0xd1cd7a96bb99ad23,
+                    Instr::TableGet { .. } => 0x90f6c6bb3c114319,
+                    Instr::TableGetImm { .. } => 0x9595b2107e23cb21,
+                    Instr::TableSize { .. } => 0xd396ced918e61bc5,
+                    Instr::TableSet { .. } => 0xf5b649b2b404d197,
+                    Instr::TableSetAt { .. } => 0xcdebf347b50872d3,
+                    Instr::TableCopy { .. } => 0xf422dd12f6642265,
+                    Instr::TableCopyTo { .. } => 0xfe2f83b88da7fa03,
+                    Instr::TableCopyFrom { .. } => 0xfe202c3d504679e1,
+                    Instr::TableCopyFromTo { .. } => 0x9d9ebedd147ee0c3,
+                    Instr::TableCopyExact { .. } => 0x9dcc8c066927a9db,
+                    Instr::TableCopyToExact { .. } => 0xbe7fae07ca7d32ef,
+                    Instr::TableCopyFromExact { .. } => 0x88d7ecf054f2807d,
+                    Instr::TableCopyFromToExact { .. } => 0xff641f66fa9a63d3,
+                    Instr::TableInit { .. } => 0x82bb6ff383050763,
+                    Instr::TableInitTo { .. } => 0x932d2a71ef983f85,
+                    Instr::TableInitFrom { .. } => 0xd8cdfe120accedcf,
+                    Instr::TableInitFromTo { .. } => 0xebca0cc0890416c5,
+                    Instr::TableInitExact { .. } => 0xc626dd2b280ae6e3,
+                    Instr::TableInitToExact { .. } => 0xdace86517a593a71,
+                    Instr::TableInitFromExact { .. } => 0xe5c82cb9a1eac895,
+                    Instr::TableInitFromToExact { .. } => 0xe5450bc5eb2d7631,
+                    Instr::TableFill { .. } => 0xe4e6730feefdc50f,
+                    Instr::TableFillAt { .. } => 0xc23bd8546b888c6b,
+                    Instr::TableFillExact { .. } => 0x98f8babdc99204f3,
+                    Instr::TableFillAtExact { .. } => 0x8e49dd000adf0689,
+                    Instr::TableGrow { .. } => 0x9e61c8c958c6b891,
+                    Instr::TableGrowImm { .. } => 0x927de647f4278045,
+                    Instr::ElemDrop(_) => 0xbc4deb8b398e8a67,
+                    Instr::DataDrop(_) => 0xaf73214c7ebdae49,
+                    Instr::MemorySize { .. } => 0xc99e9ec6fd30df43,
+                    Instr::MemoryGrow { .. } => 0x902226df112aa763,
+                    Instr::MemoryGrowBy { .. } => 0xded192652730b3f3,
+                    Instr::MemoryCopy { .. } => 0xf84118c356d104eb,
+                    Instr::MemoryCopyTo { .. } => 0xf734ad61d9950a83,
+                    Instr::MemoryCopyFrom { .. } => 0x9a5467d705c1581d,
+                    Instr::MemoryCopyFromTo { .. } => 0xc087075594f5ef01,
+                    Instr::MemoryCopyExact { .. } => 0xa300dfa09a5404db,
+                    Instr::MemoryCopyToExact { .. } => 0xdecaec4c2f332687,
+                    Instr::MemoryCopyFromExact { .. } => 0xd973b50e06e7190d,
+                    Instr::MemoryCopyFromToExact { .. } => 0xd09c8ab6e9e82db3,
+                    Instr::MemoryFill { .. } => 0x853e90844bc5b9c1,
+                    Instr::MemoryFillAt { .. } => 0xba3e3f0c5214daf9,
+                    Instr::MemoryFillImm { .. } => 0xebb50579d7dc30cb,
+                    Instr::MemoryFillExact { .. } => 0x82bf6b083bb7ab07,
+                    Instr::MemoryFillAtImm { .. } => 0xb721067ce69b7335,
+                    Instr::MemoryFillAtExact { .. } => 0xafa4befd04378e05,
+                    Instr::MemoryFillImmExact { .. } => 0x81e2eca79e7e30c1,
+                    Instr::MemoryFillAtImmExact { .. } => 0xf4c5f89614b61c1b,
+                    Instr::MemoryInit { .. } => 0xa30ffa4319eca43b,
+                    Instr::MemoryInitTo { .. } => 0x8bc41f3bd9e53945,
+                    Instr::MemoryInitFrom { .. } => 0x922c8e0448c76ad1,
+                    Instr::MemoryInitFromTo { .. } => 0xdc74c7e86a7d9527,
+                    Instr::MemoryInitExact { .. } => 0xe8e1aabd32798baf,
+                    Instr::MemoryInitToExact { .. } => 0xa4612593e32593ab,
+                    Instr::MemoryInitFromExact { .. } => 0xe6576301838fe52f,
+                    Instr::MemoryInitFromToExact { .. } => 0xb2b93bf089ba4b27,
+                    Instr::GlobalGet { .. } => 0x8d923111b80b5901,
+                    Instr::GlobalSet { .. } => 0xe498f909f87cf3d7,
+                    Instr::GlobalSetI32Imm16 { .. } => 0xbeceb62a094167cf,
+                    Instr::GlobalSetI64Imm16 { .. } => 0xb255daab1ca25487,
+                    Instr::I32Load(_) => 0xdf5b9b6fa80f3631,
+                    Instr::I32LoadAt(_) => 0xf78ad97d27554aab,
+                    Instr::I32LoadOffset16(_) => 0x8d191c3c9f983b7d,
+                    Instr::I64Load(_) => 0xcde7973deae4d139,
+                    Instr::I64LoadAt(_) => 0xc07cc699947471df,
+                    Instr::I64LoadOffset16(_) => 0xbfd2b00e2b3c39d5,
+                    Instr::F32Load(_) => 0xef1fbab218f04407,
+                    Instr::F32LoadAt(_) => 0xa8306192cd73002d,
+                    Instr::F32LoadOffset16(_) => 0xed0992f6c6239c7f,
+                    Instr::F64Load(_) => 0xf6689ac5b352c02f,
+                    Instr::F64LoadAt(_) => 0x97f205959c2a3d0b,
+                    Instr::F64LoadOffset16(_) => 0x94fbb4628a79462b,
+                    Instr::I32Load8s(_) => 0xfbb04e5f0a302d7b,
+                    Instr::I32Load8sAt(_) => 0x8e95f3bd70e298e7,
+                    Instr::I32Load8sOffset16(_) => 0xb736c7c8935178f5,
+                    Instr::I32Load8u(_) => 0xf0e219ca1d327f63,
+                    Instr::I32Load8uAt(_) => 0xc5ca3a6dc78a1a5d,
+                    Instr::I32Load8uOffset16(_) => 0xc1932ac6c5cd54ff,
+                    Instr::I32Load16s(_) => 0xe74c775c66d1dac7,
+                    Instr::I32Load16sAt(_) => 0xbc3c7a6541752f39,
+                    Instr::I32Load16sOffset16(_) => 0x98c1f9f35f8f6c6f,
+                    Instr::I32Load16u(_) => 0xdc6866c6770da481,
+                    Instr::I32Load16uAt(_) => 0xf194f68751968d29,
+                    Instr::I32Load16uOffset16(_) => 0xfc6373feac795559,
+                    Instr::I64Load8s(_) => 0xe727f7f48695f6ad,
+                    Instr::I64Load8sAt(_) => 0x9fccd4f7bd3f283f,
+                    Instr::I64Load8sOffset16(_) => 0xe865fdf1a1c55585,
+                    Instr::I64Load8u(_) => 0xf78018cfa4de9cf9,
+                    Instr::I64Load8uAt(_) => 0xed4846b1ee465189,
+                    Instr::I64Load8uOffset16(_) => 0xeb9c4fdbd7a69a7d,
+                    Instr::I64Load16s(_) => 0xce757e747c1781e1,
+                    Instr::I64Load16sAt(_) => 0x8f96d62fc6381b5b,
+                    Instr::I64Load16sOffset16(_) => 0x81747c9166be968d,
+                    Instr::I64Load16u(_) => 0x9d169d9c81872e09,
+                    Instr::I64Load16uAt(_) => 0x9ff242a4f7087a3b,
+                    Instr::I64Load16uOffset16(_) => 0x8a58890d2d2e95fd,
+                    Instr::I64Load32s(_) => 0xc7b0ed9c7dd80abb,
+                    Instr::I64Load32sAt(_) => 0xd22e5e85c5df8b81,
+                    Instr::I64Load32sOffset16(_) => 0xfe197c431899c773,
+                    Instr::I64Load32u(_) => 0xec214adc8d89b335,
+                    Instr::I64Load32uAt(_) => 0x8546452698268a41,
+                    Instr::I64Load32uOffset16(_) => 0x900023566f7219db,
+                    Instr::I32Store(_) => 0x89b4696626e6200f,
+                    Instr::I32StoreOffset16(_) => 0xa9624220aa646c45,
+                    Instr::I32StoreOffset16Imm16(_) => 0xd375c7c6e96da7eb,
+                    Instr::I32StoreAt(_) => 0x9507335cdf40a30f,
+                    Instr::I32StoreAtImm16(_) => 0xb124dcb1efb5a56f,
+                    Instr::I32Store8(_) => 0xb40f3d40e5cbc63f,
+                    Instr::I32Store8Offset16(_) => 0xb7784c5f610fa6b9,
+                    Instr::I32Store8Offset16Imm(_) => 0xb1b94e6edc784d75,
+                    Instr::I32Store8At(_) => 0xc114292b9396fca1,
+                    Instr::I32Store8AtImm(_) => 0xf958f99a724d3fa9,
+                    Instr::I32Store16(_) => 0xf4db4b8b777ba485,
+                    Instr::I32Store16Offset16(_) => 0x917265d951560b9f,
+                    Instr::I32Store16Offset16Imm(_) => 0x8e59e4b976ddd5c9,
+                    Instr::I32Store16At(_) => 0x85e34459fca92a63,
+                    Instr::I32Store16AtImm(_) => 0xffca87a7a28dcaaf,
+                    Instr::I64Store(_) => 0xaa0cfbf1401da505,
+                    Instr::I64StoreOffset16(_) => 0xde11b832af36e2c3,
+                    Instr::I64StoreOffset16Imm16(_) => 0x93a03ca4c630054d,
+                    Instr::I64StoreAt(_) => 0x8b7be36a892dbe9f,
+                    Instr::I64StoreAtImm16(_) => 0xa7164db75f5ffc79,
+                    Instr::I64Store8(_) => 0xb16fc3bd7fcf8229,
+                    Instr::I64Store8Offset16(_) => 0xf5324129bf7f4299,
+                    Instr::I64Store8Offset16Imm(_) => 0xeb1df0108fb325c1,
+                    Instr::I64Store8At(_) => 0xcc72df888ac47c3f,
+                    Instr::I64Store8AtImm(_) => 0x90e2c84d2be4491b,
+                    Instr::I64Store16(_) => 0xa670b61daad1097f,
+                    Instr::I64Store16Offset16(_) => 0xd09b793649e2dc69,
+                    Instr::I64Store16Offset16Imm(_) => 0xc5733c19fee00329,
+                    Instr::I64Store16At(_) => 0xc3471d0e7d859cdd,
+                    Instr::I64Store16AtImm(_) => 0xa27e4cfa22b0d101,
+                    Instr::I64Store32(_) => 0xacade9332186dab9,
+                    Instr::I64Store32Offset16(_) => 0xb5777e453e6429dd,
+                    Instr::I64Store32Offset16Imm16(_) => 0xc8435df9b5285e43,
+                    Instr::I64Store32At(_) => 0xb1cb0f6ea058bbbb,
+                    Instr::I64Store32AtImm16(_) => 0x8f79394f20bbda89,
+                    Instr::F32Store(_) => 0xd6df58b0ab76e99f,
+                    Instr::F32StoreOffset16(_) => 0xff1461bc14215f77,
+                    Instr::F32StoreAt(_) => 0xd2f62bd6fa3c90b9,
+                    Instr::F64Store(_) => 0xda484e6b7bd8d5db,
+                    Instr::F64StoreOffset16(_) => 0xac6256a3ca2605cb,
+                    Instr::F64StoreAt(_) => 0xe366beba3742040b,
+                    Instr::I32Eq(_) => 0x9aa2499f95dc3711,
+                    Instr::I32EqImm16(_) => 0x92ce6da978fdc40f,
+                    Instr::I64Eq(_) => 0xda860a17cb3b1a8b,
+                    Instr::I64EqImm16(_) => 0x89c423624314bf89,
+                    Instr::I32Ne(_) => 0xcbad0daca146769f,
+                    Instr::I32NeImm16(_) => 0xdca831c7fde0f85f,
+                    Instr::I64Ne(_) => 0xb0b2865912833697,
+                    Instr::I64NeImm16(_) => 0xbafcb515ea4df971,
+                    Instr::I32LtS(_) => 0xbfbff0c826a235f1,
+                    Instr::I32LtU(_) => 0x9081189b58e72897,
+                    Instr::I32LtSImm16(_) => 0x96d3c1dc900e1187,
+                    Instr::I32LtUImm16(_) => 0x9025ddff9d4de1b9,
+                    Instr::I64LtS(_) => 0xffe594b2eb58493d,
+                    Instr::I64LtU(_) => 0x9181211dcc10809b,
+                    Instr::I64LtSImm16(_) => 0xebbe15881dcd9e57,
+                    Instr::I64LtUImm16(_) => 0xfd542ad322324a27,
+                    Instr::I32GtS(_) => 0xe36a0bdacb5debf3,
+                    Instr::I32GtU(_) => 0xa5deeacd3be1c44b,
+                    Instr::I32GtSImm16(_) => 0x9a7f06186b3795c3,
+                    Instr::I32GtUImm16(_) => 0xaaf1e009bd26fd7b,
+                    Instr::I64GtS(_) => 0xc548cf95ce91a7b5,
+                    Instr::I64GtU(_) => 0xa68907e0fab9fb93,
+                    Instr::I64GtSImm16(_) => 0xf62c848e8eef17e9,
+                    Instr::I64GtUImm16(_) => 0x8a5c73b85ba194e1,
+                    Instr::I32LeS(_) => 0xbc5f6381dd176bb1,
+                    Instr::I32LeU(_) => 0xf7f780c2e00e18af,
+                    Instr::I32LeSImm16(_) => 0xc79fde79bd40aa77,
+                    Instr::I32LeUImm16(_) => 0xf9cc6a0ad9269149,
+                    Instr::I64LeS(_) => 0xc7fac5fcb8f8ed55,
+                    Instr::I64LeU(_) => 0xc1560dd513285d29,
+                    Instr::I64LeSImm16(_) => 0x99c89d3bbb73545d,
+                    Instr::I64LeUImm16(_) => 0xa3524cb19ca06bb5,
+                    Instr::I32GeS(_) => 0x98bef5ced76c7645,
+                    Instr::I32GeU(_) => 0xd53ed9432d2a8143,
+                    Instr::I32GeSImm16(_) => 0xfee355988dee53db,
+                    Instr::I32GeUImm16(_) => 0xbb62bd7c6348e5c3,
+                    Instr::I64GeS(_) => 0xd8f40b0c313c453d,
+                    Instr::I64GeU(_) => 0x98bfaac3f19897e1,
+                    Instr::I64GeSImm16(_) => 0x8956eaaa98c2e647,
+                    Instr::I64GeUImm16(_) => 0xe11e8b930ba0afed,
+                    Instr::F32Eq(_) => 0xc3587b028ec7b7d7,
+                    Instr::F64Eq(_) => 0x90fa962604933679,
+                    Instr::F32Ne(_) => 0xe8b028b8a40b6323,
+                    Instr::F64Ne(_) => 0xe511c632ed75d0ad,
+                    Instr::F32Lt(_) => 0xafe8adc3497d922f,
+                    Instr::F64Lt(_) => 0xa24d51fe3b08563d,
+                    Instr::F32Le(_) => 0xa9470d623de1df2f,
+                    Instr::F64Le(_) => 0xe5e889a7f2d74d67,
+                    Instr::F32Gt(_) => 0x8cbe5aa7efd2dac5,
+                    Instr::F64Gt(_) => 0xa2b5a501d74cc69b,
+                    Instr::F32Ge(_) => 0x9103bfb43045fc5b,
+                    Instr::F64Ge(_) => 0xe4832a9c5a4a0741,
+                    Instr::I32Clz(_) => 0xd0b363eee33e2a75,
+                    Instr::I64Clz(_) => 0xbb13e80b90e6d539,
+                    Instr::I32Ctz(_) => 0xa867670e58678389,
+                    Instr::I64Ctz(_) => 0x8ad83f5db31d4957,
+                    Instr::I32Popcnt(_) => 0xd8ad8c4a45f7cd09,
+                    Instr::I64Popcnt(_) => 0xb9603f856bc14e5b,
+                    Instr::I32Add(_) => 0xa1f888c0cefc7b6d,
+                    Instr::I64Add(_) => 0xba1adc988a80490f,
+                    Instr::I32AddImm16(_) => 0x8bc5e0c56da6ee3d,
+                    Instr::I64AddImm16(_) => 0xf75f1d741e812869,
+                    Instr::I32Sub(_) => 0xf095a662a345025f,
+                    Instr::I64Sub(_) => 0xb251e2585fd105c7,
+                    Instr::I32SubImm16(_) => 0xfbca30bbb6a376e7,
+                    Instr::I32SubImm16Rev(_) => 0x9bccf96d076e1e77,
+                    Instr::I64SubImm16(_) => 0x863549d6231f46d5,
+                    Instr::I64SubImm16Rev(_) => 0xf65f7135553a54d5,
+                    Instr::I32Mul(_) => 0xc36cfc74fa61f2b3,
+                    Instr::I64Mul(_) => 0xe9fe8ad570b71a99,
+                    Instr::I32MulImm16(_) => 0x99c04a0680397c59,
+                    Instr::I64MulImm16(_) => 0xa461c2db76abc31f,
+                    Instr::I32DivS(_) => 0xd8e9ed1b036c4299,
+                    Instr::I64DivS(_) => 0xc18a29741fec7821,
+                    Instr::I32DivSImm16(_) => 0x85487d90b69b42eb,
+                    Instr::I64DivSImm16(_) => 0xdf796fb72044ef89,
+                    Instr::I32DivSImm16Rev(_) => 0xb229de81d802ca3d,
+                    Instr::I64DivSImm16Rev(_) => 0xbee33b07c1d429e1,
+                    Instr::I32DivU(_) => 0x98f910b2a2344797,
+                    Instr::I64DivU(_) => 0xe4e5f443dafb6781,
+                    Instr::I32DivUImm16(_) => 0xa719ab83a81107c3,
+                    Instr::I64DivUImm16(_) => 0xf0a697a43b3d35d7,
+                    Instr::I32DivUImm16Rev(_) => 0xdd4813bbc3fe6d13,
+                    Instr::I64DivUImm16Rev(_) => 0xb72767906e0a5cfb,
+                    Instr::I32RemS(_) => 0x9f03cbda2aa5fa45,
+                    Instr::I64RemS(_) => 0xccf3ffab51808eaf,
+                    Instr::I32RemSImm16(_) => 0x9d4c371e9aef0583,
+                    Instr::I64RemSImm16(_) => 0x947e68335d37e889,
+                    Instr::I32RemSImm16Rev(_) => 0x96866c6454a95f1d,
+                    Instr::I64RemSImm16Rev(_) => 0x860324e1882094a3,
+                    Instr::I32RemU(_) => 0xc543d9e99bfe04db,
+                    Instr::I64RemU(_) => 0x9f9e5bd14453abf7,
+                    Instr::I32RemUImm16(_) => 0xa0023a1b616065a5,
+                    Instr::I64RemUImm16(_) => 0xd45fb600aa0ebecb,
+                    Instr::I32RemUImm16Rev(_) => 0xeb6a8bb4c61401c5,
+                    Instr::I64RemUImm16Rev(_) => 0xd793fa5aa0a964cd,
+                    Instr::I32And(_) => 0xda40caeb3a552221,
+                    Instr::I32AndEqz(_) => 0xdae0c4aaf21a2375,
+                    Instr::I32AndEqzImm16(_) => 0xe3b2a67a5da4fa6b,
+                    Instr::I32AndImm16(_) => 0x8698e382452765f1,
+                    Instr::I64And(_) => 0xf96e3bc1640f67cd,
+                    Instr::I64AndImm16(_) => 0xcb4730c03868c6c9,
+                    Instr::I32Or(_) => 0xfe54c1a4cc88dbfd,
+                    Instr::I32OrEqz(_) => 0x81c4ae5533789a77,
+                    Instr::I32OrEqzImm16(_) => 0xd5a79e8c5ff0d4f7,
+                    Instr::I32OrImm16(_) => 0x907c4d22bec999ad,
+                    Instr::I64Or(_) => 0xdc758f1076325dcf,
+                    Instr::I64OrImm16(_) => 0xcea9b6298da032eb,
+                    Instr::I32Xor(_) => 0x820cea6beee5132b,
+                    Instr::I32XorEqz(_) => 0xfb5646a229eba923,
+                    Instr::I32XorEqzImm16(_) => 0xa3d2eee0dbef491f,
+                    Instr::I32XorImm16(_) => 0xe0802ae028ddf527,
+                    Instr::I64Xor(_) => 0xcf8b3ddb8044776f,
+                    Instr::I64XorImm16(_) => 0xa84e47947f7723ad,
+                    Instr::I32Shl(_) => 0x997deb70c648fa15,
+                    Instr::I64Shl(_) => 0x80f706f88d804a25,
+                    Instr::I32ShlImm(_) => 0xfcc148faacf59d53,
+                    Instr::I64ShlImm(_) => 0xf6d8e1fa8e82bd65,
+                    Instr::I32ShlImm16Rev(_) => 0xd9b8925b3c4f7c43,
+                    Instr::I64ShlImm16Rev(_) => 0xbb5ab94e3b3b62a1,
+                    Instr::I32ShrU(_) => 0x949b3946cd09a095,
+                    Instr::I64ShrU(_) => 0xbc8d8ae8fafe0cb5,
+                    Instr::I32ShrUImm(_) => 0xdd921c308dd476c5,
+                    Instr::I64ShrUImm(_) => 0xb55a52fb3302897d,
+                    Instr::I32ShrUImm16Rev(_) => 0xf542ca19c6ede7e5,
+                    Instr::I64ShrUImm16Rev(_) => 0xdc4c2c1ee8fd89b9,
+                    Instr::I32ShrS(_) => 0xe9925858193a7679,
+                    Instr::I64ShrS(_) => 0xfb846cd977392cf3,
+                    Instr::I32ShrSImm(_) => 0xc771e42e66e029b7,
+                    Instr::I64ShrSImm(_) => 0xd65d3e841e5ef493,
+                    Instr::I32ShrSImm16Rev(_) => 0x81f8a0aebcf9ccfb,
+                    Instr::I64ShrSImm16Rev(_) => 0xc24ad68846b0f2d7,
+                    Instr::I32Rotl(_) => 0xdfd1ecfe45e3e365,
+                    Instr::I64Rotl(_) => 0xc2c0280be48f6e2b,
+                    Instr::I32RotlImm(_) => 0x821b5a3bc30952e5,
+                    Instr::I64RotlImm(_) => 0xb388feacd3e9a985,
+                    Instr::I32RotlImm16Rev(_) => 0xe0346c992152e0ad,
+                    Instr::I64RotlImm16Rev(_) => 0xbc323dcbfa95b9c1,
+                    Instr::I32Rotr(_) => 0xfce450167abfef91,
+                    Instr::I64Rotr(_) => 0xd35af32013838db5,
+                    Instr::I32RotrImm(_) => 0xb17d776a68c2901d,
+                    Instr::I64RotrImm(_) => 0xdc854e900d8c8b91,
+                    Instr::I32RotrImm16Rev(_) => 0xc3da2fbf5194e14f,
+                    Instr::I64RotrImm16Rev(_) => 0x8ce225f0c3ba867d,
+                    Instr::F32Abs(_) => 0xcd5c2fff391d82cb,
+                    Instr::F64Abs(_) => 0xc4736057bf6ce827,
+                    Instr::F32Neg(_) => 0xd366f959bf938435,
+                    Instr::F64Neg(_) => 0x8c01a158032456c5,
+                    Instr::F32Ceil(_) => 0xf5684f567a1e5c81,
+                    Instr::F64Ceil(_) => 0xbc6729b56b5bf64f,
+                    Instr::F32Floor(_) => 0xc3397446971c7b1b,
+                    Instr::F64Floor(_) => 0xc21648fabc149443,
+                    Instr::F32Trunc(_) => 0x930c87d1457a0b2f,
+                    Instr::F64Trunc(_) => 0xc457947a5515448d,
+                    Instr::F32Nearest(_) => 0xdcbd8018d58a0133,
+                    Instr::F64Nearest(_) => 0xe719d229d8dc9d11,
+                    Instr::F32Sqrt(_) => 0x8e031a9674797f6f,
+                    Instr::F64Sqrt(_) => 0xede241e1bdbf8add,
+                    Instr::F32Add(_) => 0xc0246fd5a4fa2569,
+                    Instr::F64Add(_) => 0xae61b186b8d627b1,
+                    Instr::F32Sub(_) => 0xf37398a1108c36cb,
+                    Instr::F64Sub(_) => 0xaaf86176c0dc89f5,
+                    Instr::F32Mul(_) => 0xbe5eb79b83c0c7b1,
+                    Instr::F64Mul(_) => 0x9b200d1c1640bf0d,
+                    Instr::F32Div(_) => 0xd22d29503c878647,
+                    Instr::F64Div(_) => 0x91b08c54e524bb09,
+                    Instr::F32Min(_) => 0xf83af276dd4b617f,
+                    Instr::F64Min(_) => 0xeb5d7d82375f7be7,
+                    Instr::F32Max(_) => 0x8f4d06f60f1c84fb,
+                    Instr::F64Max(_) => 0xb24f6877be71ebd5,
+                    Instr::F32Copysign(_) => 0xec122620e993dfcd,
+                    Instr::F64Copysign(_) => 0xf27f1850006566c9,
+                    Instr::F32CopysignImm(_) => 0x94d19450082a4ce9,
+                    Instr::F64CopysignImm(_) => 0x84b094c8c0503805,
+                    Instr::I32WrapI64(_) => 0xd7348da1051ffdf5,
+                    Instr::I64ExtendI32S(_) => 0xbffb8ca25ae4bf8f,
+                    Instr::I64ExtendI32U(_) => 0xec15704d37b95ec7,
+                    Instr::I32TruncF32S(_) => 0xa8edf1813c31175b,
+                    Instr::I32TruncF32U(_) => 0xf980305a8ba3be0f,
+                    Instr::I32TruncF64S(_) => 0xb982c8f45dcd5731,
+                    Instr::I32TruncF64U(_) => 0x9ca1670d1e934f45,
+                    Instr::I64TruncF32S(_) => 0xeb2506c7a7cfe6f7,
+                    Instr::I64TruncF32U(_) => 0xa230e0381f36668d,
+                    Instr::I64TruncF64S(_) => 0xce02765ab94df325,
+                    Instr::I64TruncF64U(_) => 0xb39253799e21a72d,
+                    Instr::I32TruncSatF32S(_) => 0xa164fb50eec581d3,
+                    Instr::I32TruncSatF32U(_) => 0xabac89637bdb1d8f,
+                    Instr::I32TruncSatF64S(_) => 0xe8b8c4421046aedd,
+                    Instr::I32TruncSatF64U(_) => 0x91c87015a56a944d,
+                    Instr::I64TruncSatF32S(_) => 0xb909e169382afddd,
+                    Instr::I64TruncSatF32U(_) => 0xc6f884d2705bf2d3,
+                    Instr::I64TruncSatF64S(_) => 0xa5e8386963664fa3,
+                    Instr::I64TruncSatF64U(_) => 0xa43800f9e4975aff,
+                    Instr::I32Extend8S(_) => 0xdecfc0dc5cb809af,
+                    Instr::I32Extend16S(_) => 0xcdf6bb7756026125,
+                    Instr::I64Extend8S(_) => 0xb906176cee2380bf,
+                    Instr::I64Extend16S(_) => 0xf0382669ed7a55f1,
+                    Instr::I64Extend32S(_) => 0xb61b2de5652d06e9,
+                    Instr::F32DemoteF64(_) => 0xbf82e5dd4495233b,
+                    Instr::F64PromoteF32(_) => 0xf42a79d7ed7c17c3,
+                    Instr::F32ConvertI32S(_) => 0x9e65030287165e29,
+                    Instr::F32ConvertI32U(_) => 0xe244f0acd2209f0b,
+                    Instr::F32ConvertI64S(_) => 0xd007d6d9333c7405,
+                    Instr::F32ConvertI64U(_) => 0xf31a7af87a7b7f61,
+                    Instr::F64ConvertI32S(_) => 0xbef1a0dfa7540b4d,
+                    Instr::F64ConvertI32U(_) => 0xa168200e59e18dcd,
+                    Instr::F64ConvertI64S(_) => 0xb3a2d5946ee565e3,
+                    Instr::F64ConvertI64U(_) => 0x92ad2f2873e8fbc5,
+                };
+                self.update_runtime_signature(instr_prime);
+            }
+            match instr {
                 Instr::TableIdx(_)
                 | Instr::DataSegmentIdx(_)
                 | Instr::ElementSegmentIdx(_)
@@ -992,6 +1465,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     /// Executes a generic unary [`Instruction`].
     fn execute_unary(&mut self, instr: UnaryInstr, op: fn(UntypedValue) -> UntypedValue) {
         let value = self.get_register(instr.input);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(value.to_bits());
+        }
         self.set_register(instr.result, op(value));
         self.next_instr();
     }
@@ -1003,6 +1479,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         op: fn(UntypedValue) -> Result<UntypedValue, TrapCode>,
     ) -> Result<(), Error> {
         let value = self.get_register(instr.input);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(value.to_bits());
+        }
         self.set_register(instr.result, op(value)?);
         self.try_next_instr()
     }
@@ -1015,6 +1494,10 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     ) {
         let lhs = self.get_register(instr.lhs);
         let rhs = self.get_register(instr.rhs);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+            self.update_runtime_signature(rhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs));
         self.next_instr();
     }
@@ -1030,6 +1513,10 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     {
         let lhs = self.get_register(instr.reg_in);
         let rhs = UntypedValue::from(<T>::from(instr.imm_in));
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+            self.update_runtime_signature(rhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs));
         self.next_instr();
     }
@@ -1045,6 +1532,10 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     {
         let lhs = UntypedValue::from(<T>::from(instr.imm_in));
         let rhs = self.get_register(instr.reg_in);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+            self.update_runtime_signature(rhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs));
         self.next_instr();
     }
@@ -1057,6 +1548,10 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     ) -> Result<(), Error> {
         let lhs = self.get_register(instr.lhs);
         let rhs = self.get_register(instr.rhs);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+            self.update_runtime_signature(rhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs)?);
         self.try_next_instr()
     }
@@ -1072,6 +1567,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     {
         let lhs = self.get_register(instr.reg_in);
         let rhs = <NonZeroT>::from(instr.imm_in);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs)?);
         self.try_next_instr()
     }
@@ -1086,6 +1584,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     {
         let lhs = self.get_register(instr.reg_in);
         let rhs = <NonZeroT>::from(instr.imm_in);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs));
         self.next_instr()
     }
@@ -1102,8 +1603,22 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     {
         let lhs = UntypedValue::from(<T>::from(instr.imm_in));
         let rhs = self.get_register(instr.reg_in);
+        if self.ctx.engine().config().get_update_runtime_signature() {
+            self.update_runtime_signature(lhs.to_bits());
+            self.update_runtime_signature(rhs.to_bits());
+        }
         self.set_register(instr.result, op(lhs, rhs)?);
         self.try_next_instr()
+    }
+
+    /// Updates the runtime signature in a fast unpredictable way.
+    /// We don't use hashes because we only need unpredictability, not cryptographic security.
+    fn update_runtime_signature(&mut self, value: u64) {
+        let mut runtime_signature = self.ctx.get_runtime_signature() ^ value;
+        runtime_signature ^= runtime_signature >> 27;
+        runtime_signature ^= runtime_signature << 23;
+        runtime_signature = runtime_signature.wrapping_mul(0xdfd951778ea84a0f);
+        self.ctx.set_runtime_signature(runtime_signature);
     }
 }
 
