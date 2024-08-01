@@ -1,10 +1,10 @@
 use super::Instr;
 use crate::{engine::bytecode::BranchOffset, Error};
-use alloc::vec::Vec;
 use core::{
     fmt::{self, Display},
     slice::Iter as SliceIter,
 };
+use std::vec::Vec;
 
 /// A label during the Wasmi compilation process.
 #[derive(Debug, Copy, Clone)]
@@ -60,6 +60,9 @@ pub enum LabelError {
     /// When trying to resolve an unpinned [`Label`].
     Unpinned { label: LabelRef },
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for LabelError {}
 
 impl Display for LabelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

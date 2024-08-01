@@ -1,8 +1,10 @@
 use super::{
+    data::DataSegmentsBuilder,
     export::ExternIdx,
     import::FuncTypeIdx,
     ConstExpr,
-    DataSegment,
+    CustomSectionsBuilder,
+    DataSegments,
     ElementSegment,
     ExternTypeIdx,
     FuncIdx,
@@ -16,7 +18,8 @@ use super::{
     ModuleImports,
 };
 use crate::{
-    engine::{CompiledFunc, DedupFuncType},
+    collections::Map,
+    engine::{DedupFuncType, EngineFuncSpan},
     Engine,
     Error,
     FuncType,
@@ -24,13 +27,14 @@ use crate::{
     MemoryType,
     TableType,
 };
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use std::{boxed::Box, sync::Arc, vec::Vec};
 
 /// A builder for a WebAssembly [`Module`].
 #[derive(Debug)]
 pub struct ModuleBuilder {
     pub header: ModuleHeader,
-    pub data_segments: Vec<DataSegment>,
+    pub data_segments: DataSegmentsBuilder,
+    pub custom_sections: CustomSectionsBuilder,
 }
 
 /// A builder for a WebAssembly [`Module`] header.
@@ -44,11 +48,10 @@ pub struct ModuleHeaderBuilder {
     pub memories: Vec<MemoryType>,
     pub globals: Vec<GlobalType>,
     pub globals_init: Vec<ConstExpr>,
-    pub exports: BTreeMap<Box<str>, ExternIdx>,
+    pub exports: Map<Box<str>, ExternIdx>,
     pub start: Option<FuncIdx>,
-    pub compiled_funcs: Vec<CompiledFunc>,
-    pub compiled_funcs_idx: BTreeMap<CompiledFunc, FuncIdx>,
-    pub element_segments: Vec<ElementSegment>,
+    pub engine_funcs: EngineFuncSpan,
+    pub element_segments: Box<[ElementSegment]>,
 }
 
 impl ModuleHeaderBuilder {
@@ -63,11 +66,10 @@ impl ModuleHeaderBuilder {
             memories: Vec::new(),
             globals: Vec::new(),
             globals_init: Vec::new(),
-            exports: BTreeMap::new(),
+            exports: Map::new(),
             start: None,
-            compiled_funcs: Vec::new(),
-            compiled_funcs_idx: BTreeMap::new(),
-            element_segments: Vec::new(),
+            engine_funcs: EngineFuncSpan::default(),
+            element_segments: Box::from([]),
         }
     }
 
@@ -75,7 +77,7 @@ impl ModuleHeaderBuilder {
     pub fn finish(self) -> ModuleHeader {
         ModuleHeader {
             inner: Arc::new(ModuleHeaderInner {
-                engine: self.engine.downgrade(),
+                engine: self.engine.weak(),
                 func_types: self.func_types.into(),
                 imports: self.imports.finish(),
                 funcs: self.funcs.into(),
@@ -85,9 +87,8 @@ impl ModuleHeaderBuilder {
                 globals_init: self.globals_init.into(),
                 exports: self.exports,
                 start: self.start,
-                compiled_funcs: self.compiled_funcs.into(),
-                compiled_funcs_idx: self.compiled_funcs_idx,
-                element_segments: self.element_segments.into(),
+                engine_funcs: self.engine_funcs,
+                element_segments: self.element_segments,
             }),
         }
     }
@@ -130,10 +131,11 @@ impl ModuleImportsBuilder {
 
 impl ModuleBuilder {
     /// Creates a new [`ModuleBuilder`] for the given [`Engine`].
-    pub fn new(header: ModuleHeader) -> Self {
+    pub fn new(header: ModuleHeader, custom_sections: CustomSectionsBuilder) -> Self {
         Self {
             header,
-            data_segments: Vec::new(),
+            data_segments: DataSegments::build(),
+            custom_sections,
         }
     }
 }
@@ -151,11 +153,17 @@ impl ModuleHeaderBuilder {
     pub fn push_func_types<T>(&mut self, func_types: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<FuncType, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert!(
             self.func_types.is_empty(),
             "tried to initialize module function types twice"
         );
+        let func_types = func_types.into_iter();
+        // Note: we use `reserve_exact` instead of `reserve` because this
+        //       is the last extension of the vector during the build process
+        //       and optimizes conversion to boxed slice.
+        self.func_types.reserve_exact(func_types.len());
         for func_type in func_types {
             let func_type = func_type?;
             let dedup = self.engine.alloc_func_type(func_type);
@@ -215,23 +223,23 @@ impl ModuleHeaderBuilder {
     pub fn push_funcs<T>(&mut self, funcs: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<FuncTypeIdx, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert_eq!(
             self.funcs.len(),
             self.imports.funcs.len(),
             "tried to initialize module function declarations twice"
         );
+        let funcs = funcs.into_iter();
+        // Note: we use `reserve_exact` instead of `reserve` because this
+        //       is the last extension of the vector during the build process
+        //       and optimizes conversion to boxed slice.
+        self.funcs.reserve_exact(funcs.len());
+        self.engine_funcs = self.engine.alloc_funcs(funcs.len());
         for func in funcs {
             let func_type_idx = func?;
             let func_type = self.func_types[func_type_idx.into_u32() as usize];
-            let Ok(func_index) = u32::try_from(self.funcs.len()) else {
-                panic!("function index out of bounds: {}", self.funcs.len())
-            };
             self.funcs.push(func_type);
-            let compiled_func = self.engine.alloc_func();
-            self.compiled_funcs.push(compiled_func);
-            self.compiled_funcs_idx
-                .insert(compiled_func, FuncIdx::from(func_index));
         }
         Ok(())
     }
@@ -248,12 +256,18 @@ impl ModuleHeaderBuilder {
     pub fn push_tables<T>(&mut self, tables: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<TableType, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert_eq!(
             self.tables.len(),
             self.imports.tables.len(),
             "tried to initialize module table declarations twice"
         );
+        let tables = tables.into_iter();
+        // Note: we use `reserve_exact` instead of `reserve` because this
+        //       is the last extension of the vector during the build process
+        //       and optimizes conversion to boxed slice.
+        self.tables.reserve_exact(tables.len());
         for table in tables {
             let table = table?;
             self.tables.push(table);
@@ -273,12 +287,18 @@ impl ModuleHeaderBuilder {
     pub fn push_memories<T>(&mut self, memories: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<MemoryType, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert_eq!(
             self.memories.len(),
             self.imports.memories.len(),
             "tried to initialize module linear memory declarations twice"
         );
+        let memories = memories.into_iter();
+        // Note: we use `reserve_exact` instead of `reserve` because this
+        //       is the last extension of the vector during the build process
+        //       and optimizes conversion to boxed slice.
+        self.memories.reserve_exact(memories.len());
         for memory in memories {
             let memory = memory?;
             self.memories.push(memory);
@@ -298,12 +318,18 @@ impl ModuleHeaderBuilder {
     pub fn push_globals<T>(&mut self, globals: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<Global, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert_eq!(
             self.globals.len(),
             self.imports.globals.len(),
             "tried to initialize module global variable declarations twice"
         );
+        let globals = globals.into_iter();
+        // Note: we use `reserve_exact` instead of `reserve` because this
+        //       is the last extension of the vector during the build process
+        //       and optimizes conversion to boxed slice.
+        self.globals.reserve_exact(globals.len());
         for global in globals {
             let global = global?;
             let (global_decl, global_init) = global.into_type_and_init();
@@ -330,7 +356,7 @@ impl ModuleHeaderBuilder {
             self.exports.is_empty(),
             "tried to initialize module export declarations twice"
         );
-        self.exports = exports.into_iter().collect::<Result<BTreeMap<_, _>, _>>()?;
+        self.exports = exports.into_iter().collect::<Result<Map<_, _>, _>>()?;
         Ok(())
     }
 
@@ -358,36 +384,26 @@ impl ModuleHeaderBuilder {
     pub fn push_element_segments<T>(&mut self, elements: T) -> Result<(), Error>
     where
         T: IntoIterator<Item = Result<ElementSegment, Error>>,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
         assert!(
             self.element_segments.is_empty(),
             "tried to initialize module export declarations twice"
         );
-        self.element_segments = elements.into_iter().collect::<Result<Vec<_>, _>>()?;
+        self.element_segments = elements.into_iter().collect::<Result<Box<[_]>, _>>()?;
         Ok(())
     }
 }
 
 impl ModuleBuilder {
-    /// Pushes the given linear memory data segments to the [`Module`] under construction.
-    ///
-    /// # Errors
-    ///
-    /// If any of the linear memory data segments fail to validate.
-    ///
-    /// # Panics
-    ///
-    /// If this function has already been called on the same [`ModuleBuilder`].
-    pub fn push_data_segments<T>(&mut self, data: T) -> Result<(), Error>
-    where
-        T: IntoIterator<Item = Result<DataSegment, Error>>,
-    {
-        assert!(
-            self.data_segments.is_empty(),
-            "tried to initialize module linear memory data segments twice"
-        );
-        self.data_segments = data.into_iter().collect::<Result<Vec<_>, _>>()?;
-        Ok(())
+    /// Reserve space for at least `additional` new data segments.
+    pub fn reserve_data_segments(&mut self, additional: usize) {
+        self.data_segments.reserve(additional);
+    }
+
+    /// Push another parsed data segment to the [`ModuleBuilder`].
+    pub fn push_data_segment(&mut self, data: wasmparser::Data) -> Result<(), Error> {
+        self.data_segments.push_data_segment(data)
     }
 
     /// Finishes construction of the WebAssembly [`Module`].
@@ -395,7 +411,8 @@ impl ModuleBuilder {
         Module {
             engine: engine.clone(),
             header: self.header,
-            data_segments: self.data_segments.into(),
+            data_segments: self.data_segments.finish(),
+            custom_sections: self.custom_sections.finish(),
         }
     }
 }

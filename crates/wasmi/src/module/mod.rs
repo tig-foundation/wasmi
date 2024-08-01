@@ -1,4 +1,5 @@
 mod builder;
+mod custom_section;
 mod data;
 mod element;
 mod export;
@@ -12,26 +13,29 @@ pub(crate) mod utils;
 
 use self::{
     builder::ModuleBuilder,
+    custom_section::{CustomSections, CustomSectionsBuilder},
     export::ExternIdx,
     global::Global,
     import::{ExternTypeIdx, Import},
-    parser::{parse, parse_unchecked},
-};
-pub(crate) use self::{
-    data::{DataSegment, DataSegmentKind},
-    element::{ElementSegment, ElementSegmentItems, ElementSegmentKind},
-    init_expr::ConstExpr,
-    utils::WasmiValueType,
+    parser::ModuleParser,
 };
 pub use self::{
+    custom_section::{CustomSection, CustomSectionsIter},
     export::{ExportType, FuncIdx, MemoryIdx, ModuleExportsIter, TableIdx},
     global::GlobalIdx,
     import::{FuncTypeIdx, ImportName},
     instantiate::{InstancePre, InstantiationError},
     read::{Read, ReadError},
 };
+pub(crate) use self::{
+    data::{DataSegment, DataSegments, InitDataSegment, PassiveDataSegmentBytes},
+    element::{ElementSegment, ElementSegmentItems, ElementSegmentKind},
+    init_expr::ConstExpr,
+    utils::WasmiValueType,
+};
 use crate::{
-    engine::{CompiledFunc, DedupFuncType, EngineWeak},
+    collections::Map,
+    engine::{DedupFuncType, EngineFunc, EngineFuncSpan, EngineFuncSpanIter, EngineWeak},
     Engine,
     Error,
     ExternType,
@@ -40,8 +44,8 @@ use crate::{
     MemoryType,
     TableType,
 };
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use core::{iter, slice::Iter as SliceIter};
+use std::{boxed::Box, sync::Arc};
 use wasmparser::{FuncValidatorAllocations, Parser, ValidPayload, Validator};
 
 /// A parsed and validated WebAssembly module.
@@ -49,7 +53,8 @@ use wasmparser::{FuncValidatorAllocations, Parser, ValidPayload, Validator};
 pub struct Module {
     engine: Engine,
     header: ModuleHeader,
-    data_segments: Box<[DataSegment]>,
+    data_segments: DataSegments,
+    custom_sections: CustomSections,
 }
 
 /// A parsed and validated WebAssembly module header.
@@ -68,10 +73,9 @@ struct ModuleHeaderInner {
     memories: Box<[MemoryType]>,
     globals: Box<[GlobalType]>,
     globals_init: Box<[ConstExpr]>,
-    exports: BTreeMap<Box<str>, ExternIdx>,
+    exports: Map<Box<str>, ExternIdx>,
     start: Option<FuncIdx>,
-    compiled_funcs: Box<[CompiledFunc]>,
-    compiled_funcs_idx: BTreeMap<CompiledFunc, FuncIdx>,
+    engine_funcs: EngineFuncSpan,
     element_segments: Box<[ElementSegment]>,
 }
 
@@ -96,21 +100,23 @@ impl ModuleHeader {
         &self.inner.globals[global_idx.into_u32() as usize]
     }
 
-    /// Returns the [`CompiledFunc`] for the given [`FuncIdx`].
+    /// Returns the [`EngineFunc`] for the given [`FuncIdx`].
     ///
     /// Returns `None` if [`FuncIdx`] refers to an imported function.
-    pub fn get_compiled_func(&self, func_idx: FuncIdx) -> Option<CompiledFunc> {
-        let index = func_idx.into_u32() as usize;
-        let len_imported = self.inner.imports.len_funcs();
+    pub fn get_engine_func(&self, func_idx: FuncIdx) -> Option<EngineFunc> {
+        let index = func_idx.into_u32();
+        let len_imported = self.inner.imports.len_funcs() as u32;
         let index = index.checked_sub(len_imported)?;
         // Note: It is a bug if this index access is out of bounds
         //       therefore we panic here instead of using `get`.
-        Some(self.inner.compiled_funcs[index])
+        Some(self.inner.engine_funcs.get_or_panic(index))
     }
 
-    /// Returns the [`FuncIdx`] for the given [`CompiledFunc`].
-    pub fn get_func_index(&self, func: CompiledFunc) -> Option<FuncIdx> {
-        self.inner.compiled_funcs_idx.get(&func).copied()
+    /// Returns the [`FuncIdx`] for the given [`EngineFunc`].
+    pub fn get_func_index(&self, func: EngineFunc) -> Option<FuncIdx> {
+        let position = self.inner.engine_funcs.position(func)?;
+        let len_imports = self.inner.imports.len_funcs as u32;
+        Some(FuncIdx::from(position + len_imports))
     }
 
     /// Returns the global variable type and optional initial value.
@@ -185,7 +191,25 @@ impl ModuleImports {
 }
 
 impl Module {
-    /// Creates a new Wasm [`Module`] from the given byte stream.
+    /// Creates a new Wasm [`Module`] from the given Wasm bytecode buffer.
+    ///
+    /// # Note
+    ///
+    /// This parses, validates and translates the buffered Wasm bytecode.
+    ///
+    /// # Errors
+    ///
+    /// - If the Wasm bytecode is malformed or fails to validate.
+    /// - If the Wasm bytecode violates restrictions
+    ///   set in the [`Config`] used by the `engine`.
+    /// - If Wasmi cannot translate the Wasm bytecode.
+    ///
+    /// [`Config`]: crate::Config
+    pub fn new(engine: &Engine, wasm: &[u8]) -> Result<Self, Error> {
+        ModuleParser::new(engine).parse_buffered(wasm)
+    }
+
+    /// Creates a new Wasm [`Module`] from the given Wasm bytecode stream.
     ///
     /// # Note
     ///
@@ -193,41 +217,67 @@ impl Module {
     ///
     /// # Errors
     ///
-    /// - If the `stream` cannot be parsed as a valid Wasm module.
-    /// - If the Wasm bytecode yielded by `stream` is not valid.
-    /// - If the Wasm bytecode yielded by `stream` violates restrictions
+    /// - If the Wasm bytecode is malformed or fails to validate.
+    /// - If the Wasm bytecode violates restrictions
     ///   set in the [`Config`] used by the `engine`.
-    /// - If Wasmi cannot translate the Wasm bytecode yielded by `stream`.
+    /// - If Wasmi cannot translate the Wasm bytecode.
     ///
     /// [`Config`]: crate::Config
-    pub fn new(engine: &Engine, stream: impl Read) -> Result<Self, Error> {
-        parse(engine, stream).map_err(Into::into)
+    pub fn new_streaming(engine: &Engine, stream: impl Read) -> Result<Self, Error> {
+        ModuleParser::new(engine).parse_streaming(stream)
+    }
+
+    /// Creates a new Wasm [`Module`] from the given Wasm bytecode buffer.
+    ///
+    /// # Note
+    ///
+    /// This parses and translates the buffered Wasm bytecode.
+    ///
+    /// # Safety
+    ///
+    /// - This does _not_ validate the Wasm bytecode.
+    /// - It is the caller's responsibility that the Wasm bytecode is valid.
+    /// - It is the caller's responsibility that the Wasm bytecode adheres
+    ///   to the restrictions set by the used [`Config`] of the `engine`.
+    /// - Violating the above rules is undefined behavior.
+    ///
+    /// # Errors
+    ///
+    /// - If the Wasm bytecode is malformed or contains invalid sections.
+    /// - If the Wasm bytecode fails to be compiled by Wasmi.
+    ///
+    /// [`Config`]: crate::Config
+    pub unsafe fn new_unchecked(engine: &Engine, wasm: &[u8]) -> Result<Self, Error> {
+        let parser = ModuleParser::new(engine);
+        unsafe { parser.parse_buffered_unchecked(wasm) }
     }
 
     /// Creates a new Wasm [`Module`] from the given byte stream.
     ///
     /// # Note
     ///
-    /// - This parses and translates the Wasm bytecode yielded by `stream`.
-    /// - This still validates Wasm bytecode outside of function bodies.
+    /// This parses and translates the Wasm bytecode yielded by `stream`.
     ///
     /// # Safety
     ///
-    /// - This does _not_ fully validate the Wasm bytecode yielded by `stream`.
-    /// - It is the caller's responsibility to call this function only with
-    ///   a `stream` that yields fully valid Wasm bytecode.
-    /// - Additionally it is the caller's responsibility that the Wasm bytecode
-    ///   yielded by `stream` must adhere to the restrictions set by the used
-    ///   [`Config`] of the `engine`.
-    /// - Violating these rules may lead to undefined behavior.
+    /// - This does _not_ validate the Wasm bytecode.
+    /// - It is the caller's responsibility that the Wasm bytecode is valid.
+    /// - It is the caller's responsibility that the Wasm bytecode adheres
+    ///   to the restrictions set by the used [`Config`] of the `engine`.
+    /// - Violating the above rules is undefined behavior.
     ///
     /// # Errors
     ///
-    /// If the `stream` cannot be parsed as a valid Wasm module.
+    /// - If the Wasm bytecode is malformed or contains invalid sections.
+    /// - If the Wasm bytecode fails to be compiled by Wasmi.
     ///
     /// [`Config`]: crate::Config
-    pub unsafe fn new_unchecked(engine: &Engine, stream: impl Read) -> Result<Self, Error> {
-        unsafe { parse_unchecked(engine, stream).map_err(Into::into) }
+    pub unsafe fn new_streaming_unchecked(
+        engine: &Engine,
+        stream: impl Read,
+    ) -> Result<Self, Error> {
+        let parser = ModuleParser::new(engine);
+        unsafe { parser.parse_streaming_unchecked(stream) }
     }
 
     /// Returns the [`Engine`] used during creation of the [`Module`].
@@ -317,10 +367,10 @@ impl Module {
         // since they refer to imported and not internally defined
         // functions.
         let funcs = &self.header.inner.funcs[len_imported..];
-        let compiled_funcs = &self.header.inner.compiled_funcs[..];
-        assert_eq!(funcs.len(), compiled_funcs.len());
+        let engine_funcs = self.header.inner.engine_funcs.iter();
+        assert_eq!(funcs.len(), engine_funcs.len());
         InternalFuncsIter {
-            iter: funcs.iter().zip(compiled_funcs),
+            iter: funcs.iter().zip(engine_funcs),
         }
     }
 
@@ -400,6 +450,20 @@ impl Module {
                 ExternType::Global(global_type)
             }
         }
+    }
+
+    /// Returns an iterator yielding the custom sections of the Wasm [`Module`].
+    ///
+    /// # Note
+    ///
+    /// The returned iterator will yield no items if [`Config::ignore_custom_sections`]
+    /// is set to `true` even if the original Wasm module contains custom sections.
+    ///
+    ///
+    /// [`Config::ignore_custom_sections`]: crate::Config::ignore_custom_sections
+    #[inline]
+    pub fn custom_sections(&self) -> CustomSectionsIter {
+        self.custom_sections.iter()
     }
 }
 
@@ -511,16 +575,16 @@ impl<'module> ImportType<'module> {
 /// An iterator over the internally defined functions of a [`Module`].
 #[derive(Debug)]
 pub struct InternalFuncsIter<'a> {
-    iter: iter::Zip<SliceIter<'a, DedupFuncType>, SliceIter<'a, CompiledFunc>>,
+    iter: iter::Zip<SliceIter<'a, DedupFuncType>, EngineFuncSpanIter>,
 }
 
 impl<'a> Iterator for InternalFuncsIter<'a> {
-    type Item = (DedupFuncType, CompiledFunc);
+    type Item = (DedupFuncType, EngineFunc);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter
             .next()
-            .map(|(func_type, func_body)| (*func_type, *func_body))
+            .map(|(func_type, engine_func)| (*func_type, engine_func))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

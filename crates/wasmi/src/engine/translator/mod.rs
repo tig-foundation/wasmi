@@ -27,7 +27,7 @@ use self::{
     control_stack::AcquiredTarget,
     labels::{LabelRef, LabelRegistry},
     stack::ValueStack,
-    typed_value::TypedValue,
+    typed_value::TypedVal,
     utils::{WasmFloat, WasmInteger},
 };
 pub use self::{
@@ -40,6 +40,7 @@ pub use self::{
 };
 use super::code_map::CompiledFuncEntity;
 use crate::{
+    core::{TrapCode, UntypedVal, ValType},
     engine::{
         bytecode::{
             AnyConst32,
@@ -54,16 +55,15 @@ use crate::{
         },
         config::FuelCosts,
         BlockType,
-        CompiledFunc,
+        EngineFunc,
     },
     module::{FuncIdx, FuncTypeIdx, ModuleHeader},
     Engine,
     Error,
     FuncType,
 };
-use alloc::vec::Vec;
 use core::fmt;
-use wasmi_core::{TrapCode, UntypedValue, ValueType};
+use std::vec::Vec;
 use wasmparser::{
     BinaryReaderError,
     FuncToValidate,
@@ -82,10 +82,42 @@ pub struct FuncTranslatorAllocations {
     instr_encoder: InstrEncoder,
     /// The control stack.
     control_stack: ControlStack,
-    /// Buffer to store providers when popped from the [`ValueStack`] in bulk.
-    buffer: Vec<TypedProvider>,
-    /// Buffer to temporarily store `br_table` target depths.
+    /// Some reusable buffers for translation purposes.
+    buffer: TranslationBuffers,
+}
+
+/// Reusable allocations for utility buffers.
+#[derive(Debug, Default)]
+pub struct TranslationBuffers {
+    /// Buffer to temporarily hold a bunch of [`TypedProvider`] when bulk-popped from the [`ValueStack`].
+    providers: Vec<TypedProvider>,
+    /// Buffer to temporarily hold `br_table` target depths.
     br_table_targets: Vec<u32>,
+    /// Buffer to temporarily hold a bunch of preserved [`Register`] locals.
+    preserved: Vec<PreservedLocal>,
+}
+
+/// A pair of local [`Register`] and its preserved [`Register`].
+#[derive(Debug, Copy, Clone)]
+pub struct PreservedLocal {
+    local: Register,
+    preserved: Register,
+}
+
+impl PreservedLocal {
+    /// Creates a new [`PreservedLocal`].
+    pub fn new(local: Register, preserved: Register) -> Self {
+        Self { local, preserved }
+    }
+}
+
+impl TranslationBuffers {
+    /// Resets the [`TranslationBuffers`].
+    fn reset(&mut self) {
+        self.providers.clear();
+        self.br_table_targets.clear();
+        self.preserved.clear();
+    }
 }
 
 impl FuncTranslatorAllocations {
@@ -94,8 +126,7 @@ impl FuncTranslatorAllocations {
         self.stack.reset();
         self.instr_encoder.reset();
         self.control_stack.reset();
-        self.buffer.clear();
-        self.br_table_targets.clear();
+        self.buffer.reset();
     }
 }
 
@@ -178,7 +209,7 @@ pub trait WasmTranslator<'parser>: VisitOperator<'parser, Output = Result<(), Er
     ///
     /// # Note
     ///
-    /// - Initialized the [`CompiledFunc`] in the [`Engine`].
+    /// - Initialized the [`EngineFunc`] in the [`Engine`].
     /// - Returns the allocations used for translation.
     fn finish(self, finalize: impl FnOnce(CompiledFuncEntity)) -> Result<Self::Allocations, Error>;
 }
@@ -330,7 +361,7 @@ pub struct LazyFuncTranslator {
     /// The index of the lazily compiled function within its module.
     func_idx: FuncIdx,
     /// The identifier of the to be compiled function.
-    compiled_func: CompiledFunc,
+    engine_func: EngineFunc,
     /// The Wasm module header information used for translation.
     module: ModuleHeader,
     /// Optional information about lazy Wasm validation.
@@ -341,7 +372,7 @@ impl fmt::Debug for LazyFuncTranslator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("LazyFuncTranslator")
             .field("func_idx", &self.func_idx)
-            .field("compiled_func", &self.compiled_func)
+            .field("engine_func", &self.engine_func)
             .field("module", &self.module)
             .field("validate", &self.func_to_validate.is_some())
             .finish()
@@ -352,13 +383,13 @@ impl LazyFuncTranslator {
     /// Create a new [`LazyFuncTranslator`].
     pub fn new(
         func_idx: FuncIdx,
-        compiled_func: CompiledFunc,
+        engine_func: EngineFunc,
         module: ModuleHeader,
         func_to_validate: Option<FuncToValidate<ValidatorResources>>,
     ) -> Self {
         Self {
             func_idx,
-            compiled_func,
+            engine_func,
             module,
             func_to_validate,
         }
@@ -380,7 +411,7 @@ impl<'parser> WasmTranslator<'parser> for LazyFuncTranslator {
             })
             .init_lazy_func(
                 self.func_idx,
-                self.compiled_func,
+                self.engine_func,
                 bytes,
                 &self.module,
                 self.func_to_validate.take(),
@@ -643,7 +674,7 @@ impl FuncTranslator {
 
     /// Resolves the [`FuncType`] of the given [`FuncTypeIdx`].
     fn func_type_at(&self, func_type_index: SignatureIdx) -> FuncType {
-        let func_type_index = FuncTypeIdx::from(func_type_index.to_u32()); // TODO: use the same type
+        let func_type_index = FuncTypeIdx::from(u32::from(func_type_index));
         let dedup_func_type = self.module.get_func_type(func_type_index);
         self.engine()
             .resolve_func_type(dedup_func_type, Clone::clone)
@@ -739,6 +770,61 @@ impl FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::base)
     }
 
+    /// Preserve all locals that are currently on the emulated stack.
+    ///
+    /// # Note
+    ///
+    /// This is required for correctness upon entering the compilation
+    /// of a Wasm control flow structure such as a Wasm `block`, `if` or `loop`.
+    /// Locals on the stack might be manipulated conditionally witihn the
+    /// control flow structure and therefore need to be preserved before
+    /// this might happen.
+    /// For efficiency reasons all locals are preserved independent of their
+    /// actual use in the entered control flow structure since the analysis
+    /// of their uses would be too costly.
+    fn preserve_locals(&mut self) -> Result<(), Error> {
+        let fuel_info = self.fuel_info();
+        let preserved = &mut self.alloc.buffer.preserved;
+        preserved.clear();
+        self.alloc.stack.preserve_all_locals(|preserved_local| {
+            preserved.push(preserved_local);
+            Ok(())
+        })?;
+        preserved.reverse();
+        let copy_groups = preserved.chunk_by(|a, b| {
+            // Note: we group copies into groups with continuous result register indices
+            //       because this is what allows us to fuse single `Copy` instructions into
+            //       more efficient `Copy2` or `CopyManyNonOverlapping` instructions.
+            //
+            // At the time of this writing the author was not sure if all result registers
+            // of all preserved locals are always continuous so this can be understood as
+            // a safety guard.
+            (b.preserved.to_i16() - a.preserved.to_i16()) == 1
+        });
+        for copy_group in copy_groups {
+            let len = copy_group.len();
+            let results = RegisterSpan::new(copy_group[0].preserved).iter(len);
+            let providers = &mut self.alloc.buffer.providers;
+            providers.clear();
+            providers.extend(
+                copy_group
+                    .iter()
+                    .map(|p| p.local)
+                    .map(TypedProvider::Register),
+            );
+            let instr = self.alloc.instr_encoder.encode_copies(
+                &mut self.alloc.stack,
+                results,
+                &providers[..],
+                fuel_info,
+            )?;
+            if let Some(instr) = instr {
+                self.alloc.instr_encoder.notify_preserved_register(instr)
+            }
+        }
+        Ok(())
+    }
+
     /// Convenience function to copy the parameters when branching to a control frame.
     fn translate_copy_branch_params(
         &mut self,
@@ -749,12 +835,12 @@ impl FuncTranslator {
             return Ok(());
         }
         let fuel_info = self.fuel_info();
-        let params = &mut self.alloc.buffer;
+        let params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(branch_params.len(), params);
         self.alloc.instr_encoder.encode_copies(
             &mut self.alloc.stack,
             branch_params,
-            &self.alloc.buffer[..],
+            &self.alloc.buffer.providers[..],
             fuel_info,
         )?;
         Ok(())
@@ -1103,7 +1189,7 @@ impl FuncTranslator {
         len_block_params: usize,
         len_branch_params: usize,
     ) -> Result<RegisterSpan, Error> {
-        let params = &mut self.alloc.buffer;
+        let params = &mut self.alloc.buffer.providers;
         // Pop the block parameters off the stack.
         self.alloc.stack.pop_n(len_block_params, params);
         // Peek the branch parameter registers which are going to be returned.
@@ -1173,9 +1259,9 @@ impl FuncTranslator {
     /// Evaluates the constants and pushes the proper result to the value stack.
     fn push_binary_consteval(
         &mut self,
-        lhs: TypedValue,
-        rhs: TypedValue,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        lhs: TypedVal,
+        rhs: TypedVal,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
     ) -> Result<(), Error> {
         self.alloc.stack.push_const(consteval(lhs, rhs));
         Ok(())
@@ -1194,7 +1280,7 @@ impl FuncTranslator {
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
     ) -> Result<(), Error>
     where
-        T: Into<UntypedValue>,
+        T: Into<UntypedVal>,
     {
         let result = self.alloc.stack.push_dynamic()?;
         let rhs = self.alloc.stack.alloc_const(rhs)?;
@@ -1215,7 +1301,7 @@ impl FuncTranslator {
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
     ) -> Result<(), Error>
     where
-        T: Into<UntypedValue>,
+        T: Into<UntypedVal>,
     {
         let result = self.alloc.stack.push_dynamic()?;
         let lhs = self.alloc.stack.alloc_const(lhs)?;
@@ -1258,13 +1344,13 @@ impl FuncTranslator {
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
         make_instr_imm16: fn(result: Register, lhs: Register, rhs: Const16<T>) -> Instruction,
         make_instr_imm16_rev: fn(result: Register, lhs: Const16<T>, rhs: Register) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
         make_instr_opt: fn(&mut Self, lhs: Register, rhs: Register) -> Result<bool, Error>,
         make_instr_reg_imm_opt: fn(&mut Self, lhs: Register, rhs: T) -> Result<bool, Error>,
         make_instr_imm_reg_opt: fn(&mut Self, lhs: T, rhs: Register) -> Result<bool, Error>,
     ) -> Result<(), Error>
     where
-        T: Copy + From<TypedValue> + Into<TypedValue> + TryInto<Const16<T>>,
+        T: Copy + From<TypedVal> + Into<TypedVal> + TryInto<Const16<T>>,
     {
         bail_unreachable!(self);
         match self.alloc.stack.pop2() {
@@ -1328,7 +1414,7 @@ impl FuncTranslator {
     fn translate_fbinary<T>(
         &mut self,
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
         make_instr_opt: fn(&mut Self, lhs: Register, rhs: Register) -> Result<bool, Error>,
         make_instr_reg_imm_opt: fn(&mut Self, lhs: Register, rhs: T) -> Result<bool, Error>,
         make_instr_imm_reg_opt: fn(&mut Self, lhs: T, rhs: Register) -> Result<bool, Error>,
@@ -1385,7 +1471,7 @@ impl FuncTranslator {
         &mut self,
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
         make_instr_imm: fn(result: Register, lhs: Register, rhs: Sign) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
     ) -> Result<(), Error>
     where
         T: WasmFloat,
@@ -1441,12 +1527,12 @@ impl FuncTranslator {
         &mut self,
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
         make_instr_imm16: fn(result: Register, lhs: Register, rhs: Const16<T>) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
         make_instr_opt: fn(&mut Self, lhs: Register, rhs: Register) -> Result<bool, Error>,
         make_instr_imm_opt: fn(&mut Self, lhs: Register, rhs: T) -> Result<bool, Error>,
     ) -> Result<(), Error>
     where
-        T: Copy + From<TypedValue> + TryInto<Const16<T>>,
+        T: Copy + From<TypedVal> + TryInto<Const16<T>>,
     {
         bail_unreachable!(self);
         match self.alloc.stack.pop2() {
@@ -1498,7 +1584,7 @@ impl FuncTranslator {
     fn translate_fbinary_commutative<T>(
         &mut self,
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
         make_instr_opt: fn(&mut Self, lhs: Register, rhs: Register) -> Result<bool, Error>,
         make_instr_imm_opt: fn(&mut Self, lhs: Register, rhs: T) -> Result<bool, Error>,
     ) -> Result<(), Error>
@@ -1555,7 +1641,7 @@ impl FuncTranslator {
         make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
         make_instr_imm: fn(result: Register, lhs: Register, rhs: Const16<T>) -> Instruction,
         make_instr_imm16_rev: fn(result: Register, lhs: Const16<T>, rhs: Register) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> TypedValue,
+        consteval: fn(TypedVal, TypedVal) -> TypedVal,
         make_instr_imm_reg_opt: fn(&mut Self, lhs: T, rhs: Register) -> Result<bool, Error>,
     ) -> Result<(), Error>
     where
@@ -1629,7 +1715,7 @@ impl FuncTranslator {
             rhs: Const16<NonZeroT>,
         ) -> Instruction,
         make_instr_imm16_rev: fn(result: Register, lhs: Const16<T>, rhs: Register) -> Instruction,
-        consteval: fn(TypedValue, TypedValue) -> Result<TypedValue, TrapCode>,
+        consteval: fn(TypedVal, TypedVal) -> Result<TypedVal, TrapCode>,
         make_instr_opt: fn(&mut Self, lhs: Register, rhs: Register) -> Result<bool, Error>,
         make_instr_reg_imm_opt: fn(&mut Self, lhs: Register, rhs: T) -> Result<bool, Error>,
     ) -> Result<(), Error>
@@ -1688,7 +1774,7 @@ impl FuncTranslator {
     fn translate_unary(
         &mut self,
         make_instr: fn(result: Register, input: Register) -> Instruction,
-        consteval: fn(input: TypedValue) -> TypedValue,
+        consteval: fn(input: TypedVal) -> TypedVal,
     ) -> Result<(), Error> {
         bail_unreachable!(self);
         match self.alloc.stack.pop() {
@@ -1708,7 +1794,7 @@ impl FuncTranslator {
     fn translate_unary_fallible(
         &mut self,
         make_instr: fn(result: Register, input: Register) -> Instruction,
-        consteval: fn(input: TypedValue) -> Result<TypedValue, TrapCode>,
+        consteval: fn(input: TypedVal) -> Result<TypedVal, TrapCode>,
     ) -> Result<(), Error> {
         bail_unreachable!(self);
         match self.alloc.stack.pop() {
@@ -1746,7 +1832,7 @@ impl FuncTranslator {
     /// Encodes a [`TrapCode::MemoryOutOfBounds`] trap instruction if the effective address is invalid.
     fn effective_address_and(
         &mut self,
-        ptr: TypedValue,
+        ptr: TypedVal,
         offset: u32,
         f: impl FnOnce(&mut Self, u32) -> Result<(), Error>,
     ) -> Result<(), Error> {
@@ -1835,7 +1921,7 @@ impl FuncTranslator {
         make_instr_at_imm: fn(address: Const32<u32>, value: U) -> Instruction,
     ) -> Result<(), Error>
     where
-        T: Copy + From<TypedValue>,
+        T: Copy + From<TypedVal>,
         U: TryFrom<T>,
     {
         bail_unreachable!(self);
@@ -2015,7 +2101,7 @@ impl FuncTranslator {
     /// - If both `lhs` and `rhs` are equal registers or constant values `lhs` is forwarded.
     /// - Properly chooses the correct `select` instruction encoding and optimizes for
     ///   cases with 32-bit constant values.
-    fn translate_select(&mut self, type_hint: Option<ValueType>) -> Result<(), Error> {
+    fn translate_select(&mut self, type_hint: Option<ValType>) -> Result<(), Error> {
         /// Convenience function to encode a `select` instruction.
         ///
         /// # Note
@@ -2027,7 +2113,7 @@ impl FuncTranslator {
             result: Register,
             condition: Register,
             reg_in: Register,
-            imm_in: impl Into<UntypedValue>,
+            imm_in: impl Into<UntypedVal>,
             make_instr: fn(
                 result: Register,
                 condition: Register,
@@ -2087,7 +2173,7 @@ impl FuncTranslator {
             make_instr_param: fn(Const32<T>) -> Instruction,
         ) -> Result<(), Error>
         where
-            T: Copy + Into<UntypedValue>,
+            T: Copy + Into<UntypedVal>,
             Const32<T>: TryFrom<T>,
         {
             match <Const32<T>>::try_from(imm_in) {
@@ -2149,7 +2235,7 @@ impl FuncTranslator {
                         }
                         let result = self.alloc.stack.push_dynamic()?;
                         match rhs.ty() {
-                            ValueType::I32 => encode_select_imm32(
+                            ValType::I32 => encode_select_imm32(
                                 self,
                                 result,
                                 condition,
@@ -2157,7 +2243,7 @@ impl FuncTranslator {
                                 i32::from(rhs),
                                 Instruction::select,
                             ),
-                            ValueType::F32 => encode_select_imm32(
+                            ValType::F32 => encode_select_imm32(
                                 self,
                                 result,
                                 condition,
@@ -2165,7 +2251,7 @@ impl FuncTranslator {
                                 f32::from(rhs),
                                 Instruction::select,
                             ),
-                            ValueType::I64 => encode_select_imm64(
+                            ValType::I64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2174,7 +2260,7 @@ impl FuncTranslator {
                                 Instruction::select,
                                 Instruction::i64const32,
                             ),
-                            ValueType::F64 => encode_select_imm64(
+                            ValType::F64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2183,7 +2269,7 @@ impl FuncTranslator {
                                 Instruction::select,
                                 Instruction::f64const32,
                             ),
-                            ValueType::FuncRef | ValueType::ExternRef => encode_select_imm(
+                            ValType::FuncRef | ValType::ExternRef => encode_select_imm(
                                 self,
                                 result,
                                 condition,
@@ -2199,7 +2285,7 @@ impl FuncTranslator {
                         }
                         let result = self.alloc.stack.push_dynamic()?;
                         match lhs.ty() {
-                            ValueType::I32 => encode_select_imm32(
+                            ValType::I32 => encode_select_imm32(
                                 self,
                                 result,
                                 condition,
@@ -2207,7 +2293,7 @@ impl FuncTranslator {
                                 i32::from(lhs),
                                 Instruction::select_rev,
                             ),
-                            ValueType::F32 => encode_select_imm32(
+                            ValType::F32 => encode_select_imm32(
                                 self,
                                 result,
                                 condition,
@@ -2215,7 +2301,7 @@ impl FuncTranslator {
                                 f32::from(lhs),
                                 Instruction::select_rev,
                             ),
-                            ValueType::I64 => encode_select_imm64(
+                            ValType::I64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2224,7 +2310,7 @@ impl FuncTranslator {
                                 Instruction::select_rev,
                                 Instruction::i64const32,
                             ),
-                            ValueType::F64 => encode_select_imm64(
+                            ValType::F64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2233,7 +2319,7 @@ impl FuncTranslator {
                                 Instruction::select_rev,
                                 Instruction::f64const32,
                             ),
-                            ValueType::FuncRef | ValueType::ExternRef => encode_select_imm(
+                            ValType::FuncRef | ValType::ExternRef => encode_select_imm(
                                 self,
                                 result,
                                 condition,
@@ -2286,7 +2372,7 @@ impl FuncTranslator {
                             make_param: fn(Const32<T>) -> Instruction,
                         ) -> Result<(), Error>
                         where
-                            T: Copy + Into<UntypedValue>,
+                            T: Copy + Into<UntypedVal>,
                             Const32<T>: TryFrom<T>,
                         {
                             let lhs32 = <Const32<T>>::try_from(lhs).ok();
@@ -2340,7 +2426,7 @@ impl FuncTranslator {
                             rhs: T,
                         ) -> Result<(), Error>
                         where
-                            T: Into<UntypedValue>,
+                            T: Into<UntypedVal>,
                         {
                             let lhs = this.alloc.stack.alloc_const(lhs)?;
                             let rhs = this.alloc.stack.alloc_const(rhs)?;
@@ -2368,7 +2454,7 @@ impl FuncTranslator {
                         }
                         let result = self.alloc.stack.push_dynamic()?;
                         match lhs.ty() {
-                            ValueType::I32 => {
+                            ValType::I32 => {
                                 encode_select_imm32(
                                     self,
                                     result,
@@ -2378,7 +2464,7 @@ impl FuncTranslator {
                                 )?;
                                 Ok(())
                             }
-                            ValueType::F32 => {
+                            ValType::F32 => {
                                 encode_select_imm32(
                                     self,
                                     result,
@@ -2388,7 +2474,7 @@ impl FuncTranslator {
                                 )?;
                                 Ok(())
                             }
-                            ValueType::I64 => encode_select_imm64(
+                            ValType::I64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2397,7 +2483,7 @@ impl FuncTranslator {
                                 Instruction::select_i64imm32,
                                 Instruction::i64const32,
                             ),
-                            ValueType::F64 => encode_select_imm64(
+                            ValType::F64 => encode_select_imm64(
                                 self,
                                 result,
                                 condition,
@@ -2406,7 +2492,7 @@ impl FuncTranslator {
                                 Instruction::select_f64imm32,
                                 Instruction::f64const32,
                             ),
-                            ValueType::FuncRef | ValueType::ExternRef => {
+                            ValType::FuncRef | ValType::ExternRef => {
                                 encode_select_imm(self, result, condition, lhs, rhs)
                             }
                         }
@@ -2417,7 +2503,7 @@ impl FuncTranslator {
     }
 
     /// Translates a Wasm `reinterpret` instruction.
-    fn translate_reinterpret(&mut self, ty: ValueType) -> Result<(), Error> {
+    fn translate_reinterpret(&mut self, ty: ValType) -> Result<(), Error> {
         bail_unreachable!(self);
         if let TypedProvider::Register(_) = self.alloc.stack.peek() {
             // Nothing to do.
@@ -2444,7 +2530,7 @@ impl FuncTranslator {
     fn translate_return_with(&mut self, fuel_info: FuelInfo) -> Result<(), Error> {
         let func_type = self.func_type();
         let results = func_type.results();
-        let values = &mut self.alloc.buffer;
+        let values = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(results.len(), values);
         self.alloc
             .instr_encoder
@@ -2458,7 +2544,7 @@ impl FuncTranslator {
         bail_unreachable!(self);
         let len_results = self.func_type().results().len();
         let fuel_info = self.fuel_info();
-        let values = &mut self.alloc.buffer;
+        let values = &mut self.alloc.buffer.providers;
         self.alloc.stack.peek_n(len_results, values);
         self.alloc.instr_encoder.encode_return_nez(
             &mut self.alloc.stack,

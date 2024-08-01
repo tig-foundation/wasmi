@@ -18,7 +18,17 @@ fn reg_reg() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg_imm16() {
-    test_binary_reg_imm16::<i64>(WASM_OP, 100, Instruction::i64_sub_imm16)
+    let value = 100;
+    let rhs = <Const16<i64>>::from(-value);
+    test_binary_reg_imm_with::<i64, _>(
+        WASM_OP,
+        i64::from(value),
+        [
+            Instruction::i64_add_imm16(Register::from_i16(1), Register::from_i16(0), rhs),
+            Instruction::return_reg(1),
+        ],
+    )
+    .run()
 }
 
 #[test]
@@ -30,7 +40,28 @@ fn reg_imm16_rev() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg_imm() {
-    test_binary_reg_imm32(WASM_OP, i64::MAX, Instruction::i64_sub)
+    test_reg_imm(i64::MAX);
+    test_reg_imm(i64::MAX - 1);
+    test_reg_imm(i64::MIN);
+    test_reg_imm(i64::MIN + 1);
+    test_reg_imm(i64::from(i16::MIN));
+    test_reg_imm(i64::from(i16::MAX) + 2);
+}
+
+fn test_reg_imm(value: i64) {
+    let mut testcase = testcase_binary_reg_imm(WASM_OP, value);
+    testcase.expect_func(
+        ExpectedFunc::new([
+            Instruction::i64_add(
+                Register::from_i16(1),
+                Register::from_i16(0),
+                Register::from_i16(-1),
+            ),
+            Instruction::return_reg(Register::from_i16(1)),
+        ])
+        .consts([value.wrapping_neg()]),
+    );
+    testcase.run()
 }
 
 #[test]

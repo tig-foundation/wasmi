@@ -22,7 +22,12 @@ pub enum MemoryError {
     },
     /// Tried to create too many memories
     TooManyMemories,
+    /// Tried to create memory with invalid static buffer size
+    InvalidStaticBufferSize,
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for MemoryError {}
 
 impl Display for MemoryError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -44,6 +49,9 @@ impl Display for MemoryError {
             }
             Self::TooManyMemories => {
                 write!(f, "too many memories")
+            }
+            Self::InvalidStaticBufferSize => {
+                write!(f, "tried to use too small static buffer")
             }
         }
     }

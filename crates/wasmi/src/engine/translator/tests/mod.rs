@@ -2,8 +2,8 @@
 
 mod display_wasm;
 pub mod driver;
+mod fuzz;
 mod op;
-mod regression;
 pub mod wasm_type;
 
 use self::{
@@ -11,18 +11,13 @@ use self::{
     driver::{ExpectedFunc, TranslationTest},
 };
 use crate::{
-    core::UntypedValue,
+    core::UntypedVal,
     engine::bytecode::{AnyConst32, Const16, Const32, Instruction, Register},
     Config,
     Engine,
     Module,
 };
-use std::fmt::Display;
-
-/// Converts the `wat` string source into `wasm` encoded byte.
-fn wat2wasm(wat: &str) -> Vec<u8> {
-    wat::parse_str(wat).unwrap()
-}
+use std::{fmt::Display, format};
 
 /// Compiles the `wasm` encoded bytes into a [`Module`].
 ///
@@ -56,13 +51,13 @@ use swap_ops;
 ///
 /// If any of the yielded functions consists of instruction different from the
 /// expected instructions for that function.
-fn assert_func_bodies<E, T>(wasm_bytes: impl AsRef<[u8]>, expected: E)
+fn assert_func_bodies<E, T>(wasm: &str, expected: E)
 where
     E: IntoIterator<Item = T>,
     T: IntoIterator<Item = Instruction>,
     <T as IntoIterator>::IntoIter: ExactSizeIterator,
 {
-    let mut testcase = TranslationTest::new(wasm_bytes.as_ref());
+    let mut testcase = TranslationTest::from_wat(wasm);
     for instrs in expected {
         testcase.expect_func_instrs(instrs);
     }
@@ -87,27 +82,27 @@ pub enum WasmOp {
 }
 
 impl WasmOp {
-    /// Create a new binary [`WasmOp`] for the given [`ValueType`]: `fn(T, T) -> T`
+    /// Create a new binary [`WasmOp`] for the given [`ValType`]: `fn(T, T) -> T`
     pub const fn binary(ty: WasmType, op: &'static str) -> Self {
         Self::Binary { ty, op }
     }
 
-    /// Create a new compare [`WasmOp`] for the given [`ValueType`]: `fn(T, T) -> i32`
+    /// Create a new compare [`WasmOp`] for the given [`ValType`]: `fn(T, T) -> i32`
     pub const fn cmp(ty: WasmType, op: &'static str) -> Self {
         Self::Cmp { ty, op }
     }
 
-    /// Create a new `load` [`WasmOp`] for the given [`ValueType`].
+    /// Create a new `load` [`WasmOp`] for the given [`ValType`].
     pub const fn load(ty: WasmType, op: &'static str) -> Self {
         Self::Load { ty, op }
     }
 
-    /// Create a new `store` [`WasmOp`] for the given [`ValueType`].
+    /// Create a new `store` [`WasmOp`] for the given [`ValType`].
     pub const fn store(ty: WasmType, op: &'static str) -> Self {
         Self::Store { ty, op }
     }
 
-    /// Returns the parameter [`ValueType`] of the [`WasmOp`].
+    /// Returns the parameter [`ValType`] of the [`WasmOp`].
     pub fn param_ty(&self) -> WasmType {
         match self {
             Self::Binary { ty, op: _ } => *ty,
@@ -117,7 +112,7 @@ impl WasmOp {
         }
     }
 
-    /// Returns the result [`ValueType`] of the [`WasmOp`].
+    /// Returns the result [`ValType`] of the [`WasmOp`].
     pub fn result_ty(&self) -> WasmType {
         match self {
             Self::Binary { ty, op: _ } => *ty,
@@ -127,7 +122,7 @@ impl WasmOp {
         }
     }
 
-    /// Returns the display [`ValueType`] of the [`WasmOp`].
+    /// Returns the display [`ValType`] of the [`WasmOp`].
     pub fn display_ty(&self) -> WasmType {
         match self {
             Self::Binary { .. } => self.param_ty(),
@@ -184,7 +179,7 @@ fn test_binary_reg_reg(
 ) {
     let param_ty = wasm_op.param_ty();
     let result_ty = wasm_op.result_ty();
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param {param_ty}) (param {param_ty}) (result {result_ty})
@@ -194,7 +189,7 @@ fn test_binary_reg_reg(
             )
         )
     "#,
-    ));
+    );
     let expected = [
         make_instr(
             Register::from_i16(2),
@@ -203,7 +198,7 @@ fn test_binary_reg_reg(
         ),
         Instruction::return_reg(2),
     ];
-    assert_func_bodies(wasm, [expected]);
+    assert_func_bodies(&wasm, [expected]);
 }
 
 fn testcase_binary_reg_imm<T>(wasm_op: WasmOp, value: T) -> TranslationTest
@@ -214,7 +209,7 @@ where
     let param_ty = wasm_op.param_ty();
     let result_ty = wasm_op.result_ty();
     let display_value = DisplayWasm::from(value);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param {param_ty}) (result {result_ty})
@@ -224,8 +219,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 fn testcase_binary_imm_reg<T>(wasm_op: WasmOp, value: T) -> TranslationTest
@@ -236,7 +231,7 @@ where
     let param_ty = wasm_op.param_ty();
     let result_ty = wasm_op.result_ty();
     let display_value = DisplayWasm::from(value);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param {param_ty}) (result {result_ty})
@@ -246,8 +241,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 fn test_binary_reg_imm16<T>(
@@ -292,7 +287,7 @@ fn test_binary_reg_imm32<T>(
     value: T,
     make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
 ) where
-    T: Copy + Into<UntypedValue>,
+    T: Copy + Into<UntypedVal>,
     DisplayWasm<T>: Display,
 {
     let expected = [
@@ -314,7 +309,7 @@ fn test_binary_reg_imm32_rev<T>(
     value: T,
     make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
 ) where
-    T: Copy + Into<UntypedValue>,
+    T: Copy + Into<UntypedVal>,
     DisplayWasm<T>: Display,
 {
     let expected = [
@@ -336,7 +331,7 @@ fn test_binary_reg_imm32_rev_commutative<T>(
     value: T,
     make_instr: fn(result: Register, lhs: Register, rhs: Register) -> Instruction,
 ) where
-    T: Copy + Into<UntypedValue>,
+    T: Copy + Into<UntypedVal>,
     DisplayWasm<T>: Display,
 {
     let expected = [
@@ -385,7 +380,7 @@ where
     let result_ty = wasm_op.result_ty();
     let display_lhs = DisplayWasm::from(lhs);
     let display_rhs = DisplayWasm::from(rhs);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (result {result_ty})
@@ -395,8 +390,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 fn test_binary_consteval<T, E>(wasm_op: WasmOp, lhs: T, rhs: T, expected: E)
@@ -418,7 +413,7 @@ where
 {
     let param_ty = wasm_op.param_ty();
     let result_ty = wasm_op.result_ty();
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param {param_ty}) (result {result_ty})
@@ -428,6 +423,6 @@ where
             )
         )
     "#,
-    ));
-    assert_func_bodies(wasm, [expected]);
+    );
+    assert_func_bodies(&wasm, [expected]);
 }

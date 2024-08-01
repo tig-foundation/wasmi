@@ -194,7 +194,6 @@ mod f32_trunc {
 
 mod f32_nearest {
     use super::*;
-    use wasmi_core::UntypedValue;
 
     const OP_NAME: &str = "nearest";
 
@@ -209,7 +208,7 @@ mod f32_nearest {
     ///
     /// More information here: https://github.com/rust-lang/rust/issues/96710
     fn f32_nearest(input: f32) -> f32 {
-        f32::from(UntypedValue::f32_nearest(UntypedValue::from(input)))
+        f32::from(UntypedVal::f32_nearest(UntypedVal::from(input)))
     }
 
     #[test]
@@ -343,7 +342,6 @@ mod f64_trunc {
 
 mod f64_nearest {
     use super::*;
-    use wasmi_core::UntypedValue;
 
     const OP_NAME: &str = "nearest";
 
@@ -358,7 +356,7 @@ mod f64_nearest {
     ///
     /// More information here: https://github.com/rust-lang/rust/issues/96710
     fn f64_nearest(input: f64) -> f64 {
-        f64::from(UntypedValue::f64_nearest(UntypedValue::from(input)))
+        f64::from(UntypedVal::f64_nearest(UntypedVal::from(input)))
     }
 
     #[test]
@@ -396,7 +394,7 @@ mod f64_sqrt {
 
 macro_rules! wrap_untyped {
     ($name:ident) => {
-        |input| <_>::from(UntypedValue::$name(UntypedValue::from(input)))
+        |input| <_>::from(UntypedVal::$name(UntypedVal::from(input)))
     };
 }
 

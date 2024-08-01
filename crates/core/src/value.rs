@@ -1,16 +1,16 @@
 use crate::{
+    hint::unlikely,
     nan_preserving_float::{F32, F64},
     TrapCode,
 };
-use core::{f32, i32, i64, u32, u64};
 
 /// Type of a value.
 ///
-/// See [`Value`] for details.
+/// See [`Val`] for details.
 ///
-/// [`Value`]: enum.Value.html
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ValueType {
+/// [`Val`]: enum.Value.html
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValType {
     /// 32-bit signed or unsigned integer.
     I32,
     /// 64-bit signed or unsigned integer.
@@ -25,18 +25,18 @@ pub enum ValueType {
     ExternRef,
 }
 
-impl ValueType {
-    /// Returns `true` if [`ValueType`] is a Wasm numeric type.
+impl ValType {
+    /// Returns `true` if [`ValType`] is a Wasm numeric type.
     ///
-    /// This is `true` for [`ValueType::I32`], [`ValueType::I64`],
-    /// [`ValueType::F32`] and [`ValueType::F64`].
+    /// This is `true` for [`ValType::I32`], [`ValType::I64`],
+    /// [`ValType::F32`] and [`ValType::F64`].
     pub fn is_num(&self) -> bool {
         matches!(self, Self::I32 | Self::I64 | Self::F32 | Self::F64)
     }
 
-    /// Returns `true` if [`ValueType`] is a Wasm reference type.
+    /// Returns `true` if [`ValType`] is a Wasm reference type.
     ///
-    /// This is `true` for [`ValueType::FuncRef`] and [`ValueType::ExternRef`].
+    /// This is `true` for [`ValType::FuncRef`] and [`ValType::ExternRef`].
     pub fn is_ref(&self) -> bool {
         matches!(self, Self::ExternRef | Self::FuncRef)
     }
@@ -91,12 +91,6 @@ pub trait ExtendInto<T> {
 pub trait SignExtendFrom<T> {
     /// Convert one type to another by extending with leading zeroes.
     fn sign_extend_from(self) -> Self;
-}
-
-/// Reinterprets the bits of a value of one type as another type.
-pub trait TransmuteInto<T> {
-    /// Reinterprets the bits of a value of one type as another type.
-    fn transmute_into(self) -> T;
 }
 
 /// Allows to efficiently load bytes from `memory` into a buffer.
@@ -248,16 +242,10 @@ pub trait Float<T>: ArithmeticOps<T> {
     fn ceil(self) -> T;
     /// Returns the integer part of a number.
     fn trunc(self) -> T;
-    /// Returns the nearest integer to a number. Round half-way cases away from 0.0.
-    fn round(self) -> T;
     /// Returns the nearest integer to a number. Ties are round to even number.
     fn nearest(self) -> T;
     /// Takes the square root of a number.
     fn sqrt(self) -> T;
-    /// Returns `true` if the sign of the number is positive.
-    fn is_sign_positive(self) -> bool;
-    /// Returns `true` if the sign of the number is negative.
-    fn is_sign_negative(self) -> bool;
     /// Returns the division of the two numbers.
     fn div(self, other: T) -> T;
     /// Returns the minimum of the two numbers.
@@ -377,6 +365,7 @@ macro_rules! impl_extend_into {
     ($from:ident, $into:ident) => {
         impl ExtendInto<$into> for $from {
             #[inline]
+            #[allow(clippy::cast_lossless)]
             fn extend_into(self) -> $into {
                 self as $into
             }
@@ -385,6 +374,7 @@ macro_rules! impl_extend_into {
     ($from:ident, $intermediate:ident, $into:ident) => {
         impl ExtendInto<$into> for $from {
             #[inline]
+            #[allow(clippy::cast_lossless)]
             fn extend_into(self) -> $into {
                 $into::from(self as $intermediate)
             }
@@ -430,6 +420,7 @@ macro_rules! impl_sign_extend_from {
         $(
             impl SignExtendFrom<$from_type> for $for_type {
                 #[inline]
+                #[allow(clippy::cast_lossless)]
                 fn sign_extend_from(self) -> Self {
                     (self as $from_type) as Self
                 }
@@ -443,130 +434,6 @@ impl_sign_extend_from! {
     impl SignExtendFrom<i8> for i64;
     impl SignExtendFrom<i16> for i64;
     impl SignExtendFrom<i32> for i64;
-}
-
-macro_rules! impl_transmute_into_self {
-    ($type: ident) => {
-        impl TransmuteInto<$type> for $type {
-            #[inline]
-            fn transmute_into(self) -> $type {
-                self
-            }
-        }
-    };
-}
-
-impl_transmute_into_self!(i32);
-impl_transmute_into_self!(i64);
-impl_transmute_into_self!(f32);
-impl_transmute_into_self!(f64);
-impl_transmute_into_self!(F32);
-impl_transmute_into_self!(F64);
-
-macro_rules! impl_transmute_into_as {
-    ($from: ident, $into: ident) => {
-        impl TransmuteInto<$into> for $from {
-            #[inline]
-            fn transmute_into(self) -> $into {
-                self as $into
-            }
-        }
-    };
-}
-
-impl_transmute_into_as!(i8, u8);
-impl_transmute_into_as!(i32, u32);
-impl_transmute_into_as!(i64, u64);
-
-macro_rules! impl_transmute_into_npf {
-    ($npf:ident, $float:ident, $signed:ident, $unsigned:ident) => {
-        impl TransmuteInto<$float> for $npf {
-            #[inline]
-            fn transmute_into(self) -> $float {
-                self.into()
-            }
-        }
-
-        impl TransmuteInto<$npf> for $float {
-            #[inline]
-            fn transmute_into(self) -> $npf {
-                self.into()
-            }
-        }
-
-        impl TransmuteInto<$signed> for $npf {
-            #[inline]
-            fn transmute_into(self) -> $signed {
-                self.to_bits() as _
-            }
-        }
-
-        impl TransmuteInto<$unsigned> for $npf {
-            #[inline]
-            fn transmute_into(self) -> $unsigned {
-                self.to_bits()
-            }
-        }
-
-        impl TransmuteInto<$npf> for $signed {
-            #[inline]
-            fn transmute_into(self) -> $npf {
-                $npf::from_bits(self as _)
-            }
-        }
-
-        impl TransmuteInto<$npf> for $unsigned {
-            #[inline]
-            fn transmute_into(self) -> $npf {
-                $npf::from_bits(self)
-            }
-        }
-    };
-}
-
-impl_transmute_into_npf!(F32, f32, i32, u32);
-impl_transmute_into_npf!(F64, f64, i64, u64);
-
-impl TransmuteInto<i32> for f32 {
-    #[inline]
-    fn transmute_into(self) -> i32 {
-        self.to_bits() as i32
-    }
-}
-
-impl TransmuteInto<i64> for f64 {
-    #[inline]
-    fn transmute_into(self) -> i64 {
-        self.to_bits() as i64
-    }
-}
-
-impl TransmuteInto<f32> for i32 {
-    #[inline]
-    fn transmute_into(self) -> f32 {
-        f32::from_bits(self as u32)
-    }
-}
-
-impl TransmuteInto<f64> for i64 {
-    #[inline]
-    fn transmute_into(self) -> f64 {
-        f64::from_bits(self as u64)
-    }
-}
-
-impl TransmuteInto<i32> for u32 {
-    #[inline]
-    fn transmute_into(self) -> i32 {
-        self as _
-    }
-}
-
-impl TransmuteInto<i64> for u64 {
-    #[inline]
-    fn transmute_into(self) -> i64 {
-        self as _
-    }
 }
 
 macro_rules! impl_integer_arithmetic_ops {
@@ -621,14 +488,17 @@ macro_rules! impl_integer {
     ($type:ty) => {
         impl Integer<Self> for $type {
             #[inline]
+            #[allow(clippy::cast_lossless)]
             fn leading_zeros(self) -> Self {
                 self.leading_zeros() as _
             }
             #[inline]
+            #[allow(clippy::cast_lossless)]
             fn trailing_zeros(self) -> Self {
                 self.trailing_zeros() as _
             }
             #[inline]
+            #[allow(clippy::cast_lossless)]
             fn count_ones(self) -> Self {
                 self.count_ones() as _
             }
@@ -642,17 +512,18 @@ macro_rules! impl_integer {
             }
             #[inline]
             fn div(self, other: Self) -> Result<Self, TrapCode> {
-                if other == 0 {
+                if unlikely(other == 0) {
                     return Err(TrapCode::IntegerDivisionByZero);
                 }
-                match self.overflowing_div(other) {
-                    (result, false) => Ok(result),
-                    _ => Err(TrapCode::IntegerOverflow),
+                let (result, overflow) = self.overflowing_div(other);
+                if unlikely(overflow) {
+                    return Err(TrapCode::IntegerOverflow);
                 }
+                Ok(result)
             }
             #[inline]
             fn rem(self, other: Self) -> Result<Self, TrapCode> {
-                if other == 0 {
+                if unlikely(other == 0) {
                     return Err(TrapCode::IntegerDivisionByZero);
                 }
                 Ok(self.wrapping_rem(other))
@@ -660,76 +531,41 @@ macro_rules! impl_integer {
         }
     };
 }
-
 impl_integer!(i32);
 impl_integer!(u32);
 impl_integer!(i64);
 impl_integer!(u64);
 
-#[cfg(feature = "std")]
-mod fmath {
-    pub use f32;
-    pub use f64;
-}
-
-#[cfg(not(feature = "std"))]
-mod fmath {
-    pub use super::libm_adapters::{f32, f64};
-}
-
 // We cannot call the math functions directly, because they are not all available in `core`.
 // In no-std cases we instead rely on `libm`.
 // These wrappers handle that delegation.
 macro_rules! impl_float {
-    ($type:ident, $fXX:ident, $iXX:ident) => {
+    (type $type:ident as $repr:ty) => {
         // In this particular instance we want to directly compare floating point numbers.
         impl Float<Self> for $type {
             #[inline]
             fn abs(self) -> Self {
-                fmath::$fXX::abs(<$fXX>::from(self)).into()
+                WasmFloatExt::abs(<$repr>::from(self)).into()
             }
             #[inline]
             fn floor(self) -> Self {
-                fmath::$fXX::floor(<$fXX>::from(self)).into()
+                WasmFloatExt::floor(<$repr>::from(self)).into()
             }
             #[inline]
             fn ceil(self) -> Self {
-                fmath::$fXX::ceil(<$fXX>::from(self)).into()
+                WasmFloatExt::ceil(<$repr>::from(self)).into()
             }
             #[inline]
             fn trunc(self) -> Self {
-                fmath::$fXX::trunc(<$fXX>::from(self)).into()
-            }
-            #[inline]
-            fn round(self) -> Self {
-                fmath::$fXX::round(<$fXX>::from(self)).into()
+                WasmFloatExt::trunc(<$repr>::from(self)).into()
             }
             #[inline]
             fn nearest(self) -> Self {
-                let round = self.round();
-                if fmath::$fXX::fract(<$fXX>::from(self)).abs() != 0.5 {
-                    return round;
-                }
-                let rem = ::core::ops::Rem::rem(round, 2.0);
-                if rem == 1.0 {
-                    self.floor()
-                } else if rem == -1.0 {
-                    self.ceil()
-                } else {
-                    round
-                }
+                WasmFloatExt::nearest(<$repr>::from(self)).into()
             }
             #[inline]
             fn sqrt(self) -> Self {
-                fmath::$fXX::sqrt(<$fXX>::from(self)).into()
-            }
-            #[inline]
-            fn is_sign_positive(self) -> bool {
-                <$fXX>::is_sign_positive(<$fXX>::from(self)).into()
-            }
-            #[inline]
-            fn is_sign_negative(self) -> bool {
-                <$fXX>::is_sign_negative(<$fXX>::from(self)).into()
+                WasmFloatExt::sqrt(<$repr>::from(self)).into()
             }
             #[inline]
             fn div(self, other: Self) -> Self {
@@ -737,171 +573,219 @@ macro_rules! impl_float {
             }
             #[inline]
             fn min(self, other: Self) -> Self {
-                // The implementation strictly adheres to the mandated behavior for the Wasm specification.
-                // Note: In other contexts this API is also known as: `nan_min`.
-                match (self.is_nan(), other.is_nan()) {
-                    (true, false) => self,
-                    (false, true) => other,
-                    _ => {
-                        // Case: Both values are NaN; OR both values are non-NaN.
-                        if other.is_sign_negative() {
-                            return other.min(self);
-                        }
-                        self.min(other)
+                // Note: equal to the unstable `f32::minimum` method.
+                //
+                // Once `f32::minimum` is stable we can simply use it here.
+                if self < other {
+                    self
+                } else if other < self {
+                    other
+                } else if self == other {
+                    if <$repr>::is_sign_negative(<$repr>::from(self))
+                        && <$repr>::is_sign_positive(<$repr>::from(other))
+                    {
+                        self
+                    } else {
+                        other
                     }
+                } else {
+                    // At least one input is NaN. Use `+` to perform NaN propagation and quieting.
+                    self + other
                 }
             }
             #[inline]
             fn max(self, other: Self) -> Self {
-                // The implementation strictly adheres to the mandated behavior for the Wasm specification.
-                // Note: In other contexts this API is also known as: `nan_max`.
-                match (self.is_nan(), other.is_nan()) {
-                    (true, false) => self,
-                    (false, true) => other,
-                    _ => {
-                        // Case: Both values are NaN; OR both values are non-NaN.
-                        if other.is_sign_positive() {
-                            return other.max(self);
-                        }
-                        self.max(other)
+                // Note: equal to the unstable `f32::maximum` method.
+                //
+                // Once `f32::maximum` is stable we can simply use it here.
+                if self > other {
+                    self
+                } else if other > self {
+                    other
+                } else if self == other {
+                    if <$repr>::is_sign_positive(<$repr>::from(self))
+                        && <$repr>::is_sign_negative(<$repr>::from(other))
+                    {
+                        self
+                    } else {
+                        other
                     }
+                } else {
+                    // At least one input is NaN. Use `+` to perform NaN propagation and quieting.
+                    self + other
                 }
             }
             #[inline]
             fn copysign(self, other: Self) -> Self {
-                use core::mem::size_of;
-                let sign_mask: $iXX = 1 << ((size_of::<$iXX>() << 3) - 1);
-                let self_int: $iXX = self.transmute_into();
-                let other_int: $iXX = other.transmute_into();
-                let is_self_sign_set = (self_int & sign_mask) != 0;
-                let is_other_sign_set = (other_int & sign_mask) != 0;
-                if is_self_sign_set == is_other_sign_set {
-                    self
-                } else if is_other_sign_set {
-                    (self_int | sign_mask).transmute_into()
-                } else {
-                    (self_int & !sign_mask).transmute_into()
+                WasmFloatExt::copysign(<$repr>::from(self), <$repr>::from(other)).into()
+            }
+        }
+    };
+}
+impl_float!( type F32 as f32 );
+impl_float!( type F64 as f64 );
+
+/// Low-level Wasm float interface to support `no_std` environments.
+///
+/// # Dev. Note
+///
+/// The problem is that in `no_std` builds the Rust standard library
+/// does not specify all of the below methods for `f32` and `f64`.
+/// Thus this trait serves as an adapter to import this functionality
+/// via `libm`.
+trait WasmFloatExt {
+    /// Equivalent to the Wasm `{f32,f64}.abs` instructions.
+    fn abs(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.ceil` instructions.
+    fn ceil(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.floor` instructions.
+    fn floor(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.trunc` instructions.
+    fn trunc(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.sqrt` instructions.
+    fn sqrt(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.nearest` instructions.
+    fn nearest(self) -> Self;
+    /// Equivalent to the Wasm `{f32,f64}.copysign` instructions.
+    fn copysign(self, other: Self) -> Self;
+}
+
+#[cfg(not(feature = "std"))]
+macro_rules! impl_wasm_float {
+    ($ty:ty) => {
+        impl WasmFloatExt for $ty {
+            #[inline]
+            fn abs(self) -> Self {
+                <libm::Libm<Self>>::fabs(self)
+            }
+
+            #[inline]
+            fn ceil(self) -> Self {
+                <libm::Libm<Self>>::ceil(self)
+            }
+
+            #[inline]
+            fn floor(self) -> Self {
+                <libm::Libm<Self>>::floor(self)
+            }
+
+            #[inline]
+            fn trunc(self) -> Self {
+                <libm::Libm<Self>>::trunc(self)
+            }
+
+            #[inline]
+            fn nearest(self) -> Self {
+                let round = <libm::Libm<Self>>::round(self);
+                if <Self as WasmFloatExt>::abs(self - <Self as WasmFloatExt>::trunc(self)) != 0.5 {
+                    return round;
                 }
+                let rem = round % 2.0;
+                if rem == 1.0 {
+                    <Self as WasmFloatExt>::floor(self)
+                } else if rem == -1.0 {
+                    <Self as WasmFloatExt>::ceil(self)
+                } else {
+                    round
+                }
+            }
+
+            #[inline]
+            fn sqrt(self) -> Self {
+                <libm::Libm<Self>>::sqrt(self)
+            }
+
+            #[inline]
+            fn copysign(self, other: Self) -> Self {
+                <libm::Libm<Self>>::copysign(self, other)
             }
         }
     };
 }
 
-#[test]
-fn wasm_float_min_regression_works() {
-    assert_eq!(
-        Float::min(F32::from(-0.0), F32::from(0.0)).to_bits(),
-        0x8000_0000,
-    );
-    assert_eq!(
-        Float::min(F32::from(0.0), F32::from(-0.0)).to_bits(),
-        0x8000_0000,
-    );
+#[cfg(feature = "std")]
+macro_rules! impl_wasm_float {
+    ($ty:ty) => {
+        impl WasmFloatExt for $ty {
+            #[inline]
+            fn abs(self) -> Self {
+                self.abs()
+            }
+
+            #[inline]
+            fn ceil(self) -> Self {
+                self.ceil()
+            }
+
+            #[inline]
+            fn floor(self) -> Self {
+                self.floor()
+            }
+
+            #[inline]
+            fn trunc(self) -> Self {
+                self.trunc()
+            }
+
+            #[inline]
+            fn nearest(self) -> Self {
+                self.round_ties_even()
+            }
+
+            #[inline]
+            fn sqrt(self) -> Self {
+                self.sqrt()
+            }
+
+            #[inline]
+            fn copysign(self, other: Self) -> Self {
+                self.copysign(other)
+            }
+        }
+    };
 }
 
-#[test]
-fn wasm_float_max_regression_works() {
-    assert_eq!(
-        Float::max(F32::from(-0.0), F32::from(0.0)).to_bits(),
-        0x0000_0000,
-    );
-    assert_eq!(
-        Float::max(F32::from(0.0), F32::from(-0.0)).to_bits(),
-        0x0000_0000,
-    );
-}
+impl_wasm_float!(f32);
+impl_wasm_float!(f64);
 
-impl_float!(f32, f32, i32);
-impl_float!(f64, f64, i64);
-impl_float!(F32, f32, i32);
-impl_float!(F64, f64, i64);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn copysign_regression_works() {
-    // This test has been directly extracted from a WebAssembly Specification assertion.
-    use Float as _;
-    assert!(F32::from_bits(0xFFC00000).is_nan());
-    assert_eq!(
-        F32::from_bits(0xFFC00000)
-            .copysign(F32::from_bits(0x0000_0000))
-            .to_bits(),
-        F32::from_bits(0x7FC00000).to_bits()
-    )
-}
-
-#[cfg(not(feature = "std"))]
-mod libm_adapters {
-    pub mod f32 {
-        #[inline]
-        pub fn abs(v: f32) -> f32 {
-            libm::fabsf(v)
-        }
-
-        #[inline]
-        pub fn floor(v: f32) -> f32 {
-            libm::floorf(v)
-        }
-
-        #[inline]
-        pub fn ceil(v: f32) -> f32 {
-            libm::ceilf(v)
-        }
-
-        #[inline]
-        pub fn trunc(v: f32) -> f32 {
-            libm::truncf(v)
-        }
-
-        #[inline]
-        pub fn round(v: f32) -> f32 {
-            libm::roundf(v)
-        }
-
-        #[inline]
-        pub fn fract(v: f32) -> f32 {
-            v - trunc(v)
-        }
-
-        #[inline]
-        pub fn sqrt(v: f32) -> f32 {
-            libm::sqrtf(v)
-        }
+    #[test]
+    fn wasm_float_min_regression_works() {
+        assert_eq!(
+            Float::min(F32::from(-0.0), F32::from(0.0)).to_bits(),
+            0x8000_0000,
+        );
+        assert_eq!(
+            Float::min(F32::from(0.0), F32::from(-0.0)).to_bits(),
+            0x8000_0000,
+        );
     }
 
-    pub mod f64 {
-        #[inline]
-        pub fn abs(v: f64) -> f64 {
-            libm::fabs(v)
-        }
+    #[test]
+    fn wasm_float_max_regression_works() {
+        assert_eq!(
+            Float::max(F32::from(-0.0), F32::from(0.0)).to_bits(),
+            0x0000_0000,
+        );
+        assert_eq!(
+            Float::max(F32::from(0.0), F32::from(-0.0)).to_bits(),
+            0x0000_0000,
+        );
+    }
 
-        #[inline]
-        pub fn floor(v: f64) -> f64 {
-            libm::floor(v)
-        }
-
-        #[inline]
-        pub fn ceil(v: f64) -> f64 {
-            libm::ceil(v)
-        }
-
-        #[inline]
-        pub fn trunc(v: f64) -> f64 {
-            libm::trunc(v)
-        }
-
-        #[inline]
-        pub fn round(v: f64) -> f64 {
-            libm::round(v)
-        }
-
-        #[inline]
-        pub fn fract(v: f64) -> f64 {
-            v - trunc(v)
-        }
-
-        #[inline]
-        pub fn sqrt(v: f64) -> f64 {
-            libm::sqrt(v)
-        }
+    #[test]
+    fn copysign_regression_works() {
+        // This test has been directly extracted from a WebAssembly Specification assertion.
+        use Float as _;
+        assert!(F32::from_bits(0xFFC00000).is_nan());
+        assert_eq!(
+            F32::from_bits(0xFFC00000)
+                .copysign(F32::from_bits(0x0000_0000))
+                .to_bits(),
+            F32::from_bits(0x7FC00000).to_bits()
+        )
     }
 }

@@ -30,7 +30,7 @@ impl BlockHeight {
             let len_params = u16::try_from(block_type.len_params(engine)).ok()?;
             let height = u16::try_from(height).ok()?;
             let block_height = height.checked_sub(len_params)?;
-            Some(Self(block_height))
+            Some(BlockHeight(block_height))
         }
         new_impl(engine, height, block_type)
             .ok_or(TranslationError::EmulatedValueStackOverflow)
@@ -108,7 +108,7 @@ impl BlockControlFrame {
     /// Returns an iterator over the registers holding the branching parameters of the [`BlockControlFrame`].
     pub fn branch_params(&self, engine: &Engine) -> RegisterSpanIter {
         self.branch_params
-            .iter(self.block_type().len_results(engine) as usize)
+            .iter(self.block_type().len_results(engine))
     }
 
     /// Returns the label for the branch destination of the [`BlockControlFrame`].
@@ -213,7 +213,7 @@ impl LoopControlFrame {
     /// Returns an iterator over the registers holding the branching parameters of the [`LoopControlFrame`].
     pub fn branch_params(&self, engine: &Engine) -> RegisterSpanIter {
         self.branch_params
-            .iter(self.block_type().len_params(engine) as usize)
+            .iter(self.block_type().len_params(engine))
     }
 
     /// Returns the label for the branch destination of the [`LoopControlFrame`].
@@ -383,7 +383,7 @@ impl IfControlFrame {
     /// Returns an iterator over the registers holding the branching parameters of the [`IfControlFrame`].
     pub fn branch_params(&self, engine: &Engine) -> RegisterSpanIter {
         self.branch_params
-            .iter(self.block_type().len_results(engine) as usize)
+            .iter(self.block_type().len_results(engine))
     }
 
     /// Returns the label for the branch destination of the [`IfControlFrame`].

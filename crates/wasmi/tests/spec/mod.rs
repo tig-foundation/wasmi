@@ -9,6 +9,7 @@ use self::{
     descriptor::{TestDescriptor, TestSpan},
     error::TestError,
     profile::TestProfile,
+    run::{ParsingMode, RunnerConfig},
 };
 use wasmi::Config;
 
@@ -18,13 +19,15 @@ macro_rules! define_tests {
         let config = $get_config:expr;
         let runner = $runner_fn:path;
 
-        $( $(#[$attr:meta])* fn $test_name:ident($file_name:expr); )*
+        $( $(#[$attr:meta])* fn $test_name:ident($file_name:literal); )*
     ) => {
         $(
             #[test]
             $( #[$attr] )*
             fn $test_name() {
-                $runner_fn(&format!("{}/{}", $test_folder, $file_name), $get_config)
+                let name: &'static ::core::primitive::str = ::core::concat!($test_folder, "/", $file_name);
+                let file: &'static ::core::primitive::str = self::blobs::$test_name();
+                $runner_fn(name, file, $get_config)
             }
         )*
     };
@@ -35,7 +38,7 @@ macro_rules! define_spec_tests {
         let config = $get_config:expr;
         let runner = $runner_fn:path;
 
-        $( $(#[$attr:meta])* fn $test_name:ident($file_name:expr); )*
+        $( $(#[$attr:meta])* fn $test_name:ident($file_name:literal); )*
     ) => {
         define_tests! {
             let folder = "testsuite";
@@ -66,7 +69,7 @@ fn mvp_config() -> Config {
 /// # Note
 ///
 /// The Wasm MVP has no Wasm proposals enabled.
-fn test_config(consume_fuel: bool) -> Config {
+fn test_config(consume_fuel: bool, mode: ParsingMode) -> RunnerConfig {
     let mut config = mvp_config();
     // We have to enable the `mutable-global` Wasm proposal because
     // it seems that the entire Wasm spec test suite is already built
@@ -81,7 +84,7 @@ fn test_config(consume_fuel: bool) -> Config {
         .wasm_tail_call(true)
         .wasm_extended_const(true)
         .consume_fuel(consume_fuel);
-    config
+    RunnerConfig { config, mode }
 }
 
 macro_rules! expand_tests {
@@ -187,10 +190,35 @@ macro_rules! expand_tests {
     };
 }
 
+macro_rules! include_wasm_blobs {
+    (
+        let folder = $test_folder:literal;
+
+        $( $(#[$attr:meta])* fn $test_name:ident($file_name:literal); )*
+    ) => {
+        $(
+            $( #[$attr] )*
+            pub fn $test_name() -> &'static str {
+                ::core::include_str!(
+                    ::core::concat!($test_folder, "/", $file_name, ".wast")
+                )
+            }
+        )*
+    };
+}
+
+mod blobs {
+    expand_tests! {
+        include_wasm_blobs,
+
+        let folder = "testsuite";
+    }
+}
+
 expand_tests! {
     define_spec_tests,
 
-    let config = test_config(false);
+    let config = test_config(false, ParsingMode::Buffered);
     let runner = run::run_wasm_spec_test;
 }
 
@@ -200,7 +228,18 @@ mod fueled {
     expand_tests! {
         define_spec_tests,
 
-        let config = test_config(true);
+        let config = test_config(true, ParsingMode::Buffered);
+        let runner = run::run_wasm_spec_test;
+    }
+}
+
+mod streaming {
+    use super::*;
+
+    expand_tests! {
+        define_spec_tests,
+
+        let config = test_config(false, ParsingMode::Streaming);
         let runner = run::run_wasm_spec_test;
     }
 }

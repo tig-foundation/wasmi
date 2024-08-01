@@ -3,10 +3,10 @@
 |:----------------------:|:--------------------:|:----------------:|:--------------------:|
 | [![ci][1]][2]          | [![codecov][3]][4]   | [![docs][5]][6] | [![crates][7]][8]  |
 
-[1]: https://github.com/paritytech/wasmi/workflows/Rust%20-%20Continuous%20Integration/badge.svg?branch=master
-[2]: https://github.com/paritytech/wasmi/actions?query=workflow%3A%22Rust+-+Continuous+Integration%22+branch%3Amaster
-[3]: https://codecov.io/gh/paritytech/wasmi/branch/master/graph/badge.svg
-[4]: https://codecov.io/gh/paritytech/wasmi/branch/master
+[1]: https://github.com/wasmi-labs/wasmi/workflows/Rust%20-%20Continuous%20Integration/badge.svg?branch=master
+[2]: https://github.com/wasmi-labs/wasmi/actions?query=workflow%3A%22Rust+-+Continuous+Integration%22+branch%3Amaster
+[3]: https://codecov.io/gh/wasmi-labs/wasmi/branch/master/graph/badge.svg
+[4]: https://codecov.io/gh/wasmi-labs/wasmi/branch/master
 [5]: https://docs.rs/wasmi/badge.svg
 [6]: https://docs.rs/wasmi
 [7]: https://img.shields.io/crates/v/wasmi.svg
@@ -21,13 +21,16 @@
   <img src="./resources/wasmi-logo.png" width="100" height="100">
 </p>
 
-Wasmi is an efficient and lightweight WebAssembly interpreter for embedded systems.
+Wasmi is an efficient and lightweight WebAssembly interpreter with a focus on constrained and embedded systems.
 
-At Parity we use Wasmi in the [Polkadot SDK](https://github.com/paritytech/polkadot-sdk)
-as the execution engine that runs WebAssembly based smart contracts.
-Moreover, Wasmi is itself compiled to WebAssembly and executed inside of the [Wasmtime] sandbox for enhanced security.
+Version `0.31.0` has been [audited by SRLabs].
 
 [Wasmtime]: https://github.com/bytecodealliance/wasmtime
+[audited by SRLabs]: ./resources/security-audit-2023-12-20.pdf
+
+## Announcement: Transfer of Ownership
+
+As of 2024-02-01, the original owner and maintainer of the Wasmi project, Parity Technologies, has officially transferred ownership of the project to me, Robin Freyler. Read more about this transfer [here](NEWS.md#announcement-transfer-of-ownership).
 
 ## Distinct Features
 
@@ -39,6 +42,10 @@ The following list states some of the distinct features of Wasmi.
 - Loosely mirrors the [Wasmtime API](https://docs.rs/wasmtime/).
 - 100% WebAssembly spec testsuite compliance.
 - Built-in support for fuel metering.
+
+## Usage
+
+Refer to the [Wasmi usage guide](./docs/usage.md) to learn how properly to use [Wasmi](https://crates.io/crates/wasmi).
 
 ## WebAssembly Proposals
 
@@ -83,36 +90,19 @@ The new Wasmi engine supports a variety of WebAssembly proposals and will suppor
 [WASI]: https://github.com/WebAssembly/WASI
 [`wasmi_wasi` crate]: ./crates/wasi
 
-[(#363)]: https://github.com/paritytech/wasmi/issues/363
-[(#364)]: https://github.com/paritytech/wasmi/issues/364
-[(#496)]: https://github.com/paritytech/wasmi/issues/496
-[(#628)]: https://github.com/paritytech/wasmi/pull/628
-[(#635)]: https://github.com/paritytech/wasmi/pull/635
-[(#638)]: https://github.com/paritytech/wasmi/pull/638
-[(#683)]: https://github.com/paritytech/wasmi/pull/683
-[(#707)]: https://github.com/paritytech/wasmi/pull/707
-[(#774)]: https://github.com/paritytech/wasmi/pull/774
-[(#775)]: https://github.com/paritytech/wasmi/pull/775
-[(#776)]: https://github.com/paritytech/wasmi/pull/776
-[(#777)]: https://github.com/paritytech/wasmi/pull/777
-[(#897)]: https://github.com/paritytech/wasmi/pull/897
-
-## Usage
-
-### As CLI Application
-
-Install the newest Wasmi CLI version:
-```console
-cargo install wasmi_cli
-```
-Run `wasm32-unknown-unknown` or `wasm32-wasi` Wasm binaries:
-```console
-wasmi_cli <WASM_FILE> --invoke <FUNC_NAME> [<FUNC_ARGS>]*
-```
-
-### As Rust Library
-
-Refer to the [Wasmi crate docs](https://docs.rs/wasmi) to learn how to use the [Wasmi crate](https://crates.io/crates/wasmi) as library.
+[(#363)]: https://github.com/wasmi-labs/wasmi/issues/363
+[(#364)]: https://github.com/wasmi-labs/wasmi/issues/364
+[(#496)]: https://github.com/wasmi-labs/wasmi/issues/496
+[(#628)]: https://github.com/wasmi-labs/wasmi/pull/628
+[(#635)]: https://github.com/wasmi-labs/wasmi/pull/635
+[(#638)]: https://github.com/wasmi-labs/wasmi/pull/638
+[(#683)]: https://github.com/wasmi-labs/wasmi/pull/683
+[(#707)]: https://github.com/wasmi-labs/wasmi/pull/707
+[(#774)]: https://github.com/wasmi-labs/wasmi/pull/774
+[(#775)]: https://github.com/wasmi-labs/wasmi/pull/775
+[(#776)]: https://github.com/wasmi-labs/wasmi/pull/776
+[(#777)]: https://github.com/wasmi-labs/wasmi/pull/777
+[(#897)]: https://github.com/wasmi-labs/wasmi/pull/897
 
 ## Development
 
@@ -121,7 +111,7 @@ Refer to the [Wasmi crate docs](https://docs.rs/wasmi) to learn how to use the [
 Clone the Wasmi repository and build using `cargo`:
 
 ```console
-git clone https://github.com/paritytech/wasmi.git --recursive
+git clone https://github.com/wasmi-labs/wasmi.git --recursive
 cd wasmi
 cargo build
 cargo test
@@ -137,7 +127,7 @@ cargo bench
 
 Use `translate`, `instantiate`, `execute` or `overhead` filters to only run benchmarks that test performance of Wasm translation, instantiation, execution or miscellaneous overhead respectively, e.g. `cargo bench execute`.
 
-We maintain a timeline for benchmarks of every commit to `master` that [can be viewed here](https://paritytech.github.io/wasmi/benchmarks/).
+We maintain a timeline for benchmarks of every commit to `master` that [can be viewed here](https://wasmi-labs.github.io/wasmi/benchmarks/).
 
 ## Supported Platforms
 
@@ -146,24 +136,6 @@ Wasmi supports a wide variety of architectures and platforms.
 - Fore more details see this [list of supported platforms for Rust](https://doc.rust-lang.org/stable/rustc/platform-support.html).
 - **Note:** Wasmi can be used in `no_std` embedded environments, thus not requiring the standard library (`std`).
 - Only some platforms are checked in CI and guaranteed to be fully working by the Wasmi maintainers.
-
-## Production Builds
-
-In order to reap the most performance out of Wasmi we highly recommended
-to compile the Wasmi crate using the following Cargo `profile`:
-
-```toml
-[profile.release]
-lto = "fat"
-codegen-units = 1
-```
-
-When compiling for the WebAssembly target we highly recommend to post-optimize
-Wasmi using [Binaryen]'s `wasm-opt` tool since our experiments displayed a
-80-100% performance improvements when executed under Wasmtime and also
-slightly smaller Wasm binaries.
-
-[Binaryen]: https://github.com/WebAssembly/binaryen
 
 ## License
 

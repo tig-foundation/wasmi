@@ -2,7 +2,7 @@ use super::*;
 
 use crate::engine::bytecode::GlobalIdx;
 use core::fmt::Display;
-use wasm_type::WasmType;
+use wasm_type::WasmTy;
 
 /// Test for `global.get` of internally defined mutable global variables.
 ///
@@ -13,12 +13,12 @@ use wasm_type::WasmType;
 /// during program execution.
 fn test_mutable<T>(value: T)
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::NAME;
     let display_value = DisplayWasm::from(value);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (global $g (mut {ty}) ({ty}.const {display_value}))
@@ -26,9 +26,9 @@ where
                 global.get $g
             )
         )
-    "#,
-    ));
-    TranslationTest::new(wasm)
+    "#
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::global_get(Register::from_i16(0), GlobalIdx::from(0)),
             Instruction::return_reg(Register::from_i16(0)),
@@ -68,12 +68,12 @@ fn mutable_f64() {
 /// value of the global variable can be applied always.
 fn test_immutable<T>(value: T)
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::NAME;
     let display_value = DisplayWasm::from(value);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (global $g {ty} ({ty}.const {display_value}))
@@ -82,9 +82,9 @@ where
             )
         )
     "#,
-    ));
-    let mut testcase = TranslationTest::new(wasm);
-    let instr = <T as WasmType>::return_imm_instr(&value);
+    );
+    let mut testcase = TranslationTest::from_wat(&wasm);
+    let instr = <T as WasmTy>::return_imm_instr(&value);
     match instr {
         Instruction::ReturnReg { value: register } => {
             assert!(register.is_const());
@@ -130,10 +130,10 @@ fn immutable_f64() {
 /// to being imported.
 fn test_imported<T>()
 where
-    T: WasmType,
+    T: WasmTy,
 {
     let ty = T::NAME;
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (import "host" "g" (global $g {ty}))
@@ -142,8 +142,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::global_get(Register::from_i16(0), GlobalIdx::from(0)),
             Instruction::return_reg(Register::from_i16(0)),
@@ -178,8 +178,7 @@ fn imported_f64() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn test_global_get_as_return_values_0() {
-    let wasm = wat2wasm(
-        r#"
+    let wasm = r#"
         (module
             (global $g (mut i64) (i64.const 0))
             (func (result i32 i64)
@@ -187,9 +186,8 @@ fn test_global_get_as_return_values_0() {
                 (global.get $g)
             )
         )
-        "#,
-    );
-    TranslationTest::new(wasm)
+        "#;
+    TranslationTest::from_wat(wasm)
         .expect_func(
             ExpectedFunc::new([
                 Instruction::global_get(Register::from_i16(0), GlobalIdx::from(0)),
@@ -203,8 +201,7 @@ fn test_global_get_as_return_values_0() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn test_global_get_as_return_values_1() {
-    let wasm = wat2wasm(
-        r#"
+    let wasm = r#"
         (module
             (global $g (mut i64) (i64.const 0))
             (func (result i32 i64)
@@ -214,9 +211,8 @@ fn test_global_get_as_return_values_1() {
                 )
             )
         )
-        "#,
-    );
-    TranslationTest::new(wasm)
+        "#;
+    TranslationTest::from_wat(wasm)
         .expect_func(
             ExpectedFunc::new([
                 Instruction::global_get(Register::from_i16(0), GlobalIdx::from(0)),

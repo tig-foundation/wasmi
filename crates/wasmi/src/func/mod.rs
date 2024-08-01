@@ -11,21 +11,20 @@ pub use self::{
     error::FuncError,
     func_type::FuncType,
     funcref::FuncRef,
-    into_func::{IntoFunc, WasmRet, WasmType, WasmTypeList},
+    into_func::{IntoFunc, WasmRet, WasmTy, WasmTyList},
     typed_func::{TypedFunc, WasmParams, WasmResults},
 };
 use super::{
-    engine::{CompiledFunc, DedupFuncType, FuncFinished, FuncParams},
+    engine::{DedupFuncType, EngineFunc, FuncFinished, FuncParams},
     AsContext,
     AsContextMut,
     Instance,
     StoreContext,
     Stored,
 };
-use crate::{engine::ResumableCall, Engine, Error, Value};
-use alloc::{boxed::Box, sync::Arc};
+use crate::{collections::arena::ArenaIndex, engine::ResumableCall, Engine, Error, Val};
 use core::{fmt, fmt::Debug, num::NonZeroU32};
-use wasmi_arena::ArenaIndex;
+use std::{boxed::Box, sync::Arc};
 
 /// A raw index to a function entity.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -102,6 +101,10 @@ impl From<HostFuncEntity> for FuncEntity {
 /// A host function reference and its function type.
 #[derive(Debug, Copy, Clone)]
 pub struct HostFuncEntity {
+    /// The number of parameters of the [`HostFuncEntity`].
+    len_params: u16,
+    /// The number of results of the [`HostFuncEntity`].
+    len_results: u16,
     /// The function type of the host function.
     ty: DedupFuncType,
     /// A reference to the trampoline of the host function.
@@ -110,8 +113,26 @@ pub struct HostFuncEntity {
 
 impl HostFuncEntity {
     /// Creates a new [`HostFuncEntity`].
-    pub fn new(ty: DedupFuncType, func: Trampoline) -> Self {
-        Self { ty, func }
+    pub fn new(engine: &Engine, ty: &FuncType, func: Trampoline) -> Self {
+        let len_params = ty.len_params();
+        let len_results = ty.len_results();
+        let ty = engine.alloc_func_type(ty.clone());
+        Self {
+            len_params,
+            len_results,
+            ty,
+            func,
+        }
+    }
+
+    /// Returns the number of parameters of the [`HostFuncEntity`].
+    pub fn len_params(&self) -> u16 {
+        self.len_params
+    }
+
+    /// Returns the number of results of the [`HostFuncEntity`].
+    pub fn len_results(&self) -> u16 {
+        self.len_results
     }
 
     /// Returns the signature of the host function.
@@ -141,14 +162,14 @@ pub struct WasmFuncEntity {
     /// The function type of the Wasm function.
     ty: DedupFuncType,
     /// The compiled function body of the Wasm function.
-    body: CompiledFunc,
+    body: EngineFunc,
     /// The instance associated to the Wasm function.
     instance: Instance,
 }
 
 impl WasmFuncEntity {
     /// Creates a new Wasm function from the given raw parts.
-    pub fn new(signature: DedupFuncType, body: CompiledFunc, instance: Instance) -> Self {
+    pub fn new(signature: DedupFuncType, body: EngineFunc, instance: Instance) -> Self {
         Self {
             ty: signature,
             body,
@@ -167,7 +188,7 @@ impl WasmFuncEntity {
     }
 
     /// Returns the Wasm function body of the [`Func`].
-    pub fn func_body(&self) -> CompiledFunc {
+    pub fn func_body(&self) -> EngineFunc {
         self.body
     }
 }
@@ -175,7 +196,7 @@ impl WasmFuncEntity {
 /// A host function instance.
 pub struct HostFuncTrampolineEntity<T> {
     /// The type of the associated host function.
-    ty: DedupFuncType,
+    ty: FuncType,
     /// The trampoline of the associated host function.
     trampoline: TrampolineEntity<T>,
 }
@@ -183,7 +204,7 @@ pub struct HostFuncTrampolineEntity<T> {
 impl<T> Clone for HostFuncTrampolineEntity<T> {
     fn clone(&self) -> Self {
         Self {
-            ty: self.ty,
+            ty: self.ty.clone(),
             trampoline: self.trampoline.clone(),
         }
     }
@@ -198,21 +219,18 @@ impl<T> Debug for HostFuncTrampolineEntity<T> {
 impl<T> HostFuncTrampolineEntity<T> {
     /// Creates a new host function trampoline from the given dynamically typed closure.
     pub fn new(
-        engine: &Engine,
+        // engine: &Engine,
         ty: FuncType,
-        func: impl Fn(Caller<'_, T>, &[Value], &mut [Value]) -> Result<(), Error>
-            + Send
-            + Sync
-            + 'static,
+        func: impl Fn(Caller<'_, T>, &[Val], &mut [Val]) -> Result<(), Error> + Send + Sync + 'static,
     ) -> Self {
         // Preprocess parameters and results buffers so that we can reuse those
         // computations within the closure implementation. We put both parameters
         // and results into a single buffer which we can split to minimize the
         // amount of allocations per trampoline invokation.
-        let params_iter = ty.params().iter().copied().map(Value::default);
-        let results_iter = ty.results().iter().copied().map(Value::default);
+        let params_iter = ty.params().iter().copied().map(Val::default);
+        let results_iter = ty.results().iter().copied().map(Val::default);
         let len_params = ty.params().len();
-        let params_results: Box<[Value]> = params_iter.chain(results_iter).collect();
+        let params_results: Box<[Val]> = params_iter.chain(results_iter).collect();
         let trampoline = <TrampolineEntity<T>>::new(move |caller, args| {
             // We are required to clone the buffer because we are operating within a `Fn`.
             // This way the trampoline closure only has to own a single slice buffer.
@@ -224,19 +242,18 @@ impl<T> HostFuncTrampolineEntity<T> {
             func(caller, params, results)?;
             Ok(func_results.encode_results_from_slice(results).unwrap())
         });
-        let ty = engine.alloc_func_type(ty.clone());
         Self { ty, trampoline }
     }
 
     /// Creates a new host function trampoline from the given statically typed closure.
-    pub fn wrap<Params, Results>(engine: &Engine, func: impl IntoFunc<T, Params, Results>) -> Self {
-        let (signature, trampoline) = func.into_func();
-        let ty = engine.alloc_func_type(signature);
+    pub fn wrap<Params, Results>(func: impl IntoFunc<T, Params, Results>) -> Self {
+        let (ty, trampoline) = func.into_func();
+        // let ty = engine.alloc_func_type(signature);
         Self { ty, trampoline }
     }
 
-    /// Returns the signature of the host function.
-    pub fn ty_dedup(&self) -> &DedupFuncType {
+    /// Returns the [`FuncType`] of the host function.
+    pub fn func_type(&self) -> &FuncType {
         &self.ty
     }
 
@@ -275,7 +292,7 @@ impl<T> TrampolineEntity<T> {
     /// The result is written back into the `outputs` buffer.
     pub fn call(
         &self,
-        mut ctx: impl AsContextMut<UserState = T>,
+        mut ctx: impl AsContextMut<Data = T>,
         instance: Option<&Instance>,
         params: FuncParams,
     ) -> Result<FuncFinished, Error> {
@@ -332,38 +349,34 @@ impl Func {
     ///   created using this constructor have runtime overhead for every invocation that
     ///   can be avoided by using [`Func::wrap`].
     pub fn new<T>(
-        mut ctx: impl AsContextMut<UserState = T>,
+        mut ctx: impl AsContextMut<Data = T>,
         ty: FuncType,
-        func: impl Fn(Caller<'_, T>, &[Value], &mut [Value]) -> Result<(), Error>
-            + Send
-            + Sync
-            + 'static,
+        func: impl Fn(Caller<'_, T>, &[Val], &mut [Val]) -> Result<(), Error> + Send + Sync + 'static,
     ) -> Self {
-        let engine = ctx.as_context().store.engine();
-        let host_func = HostFuncTrampolineEntity::new(engine, ty, func);
-        let ty_dedup = *host_func.ty_dedup();
+        let host_func = HostFuncTrampolineEntity::new(ty.clone(), func);
         let trampoline = host_func.trampoline().clone();
         let func = ctx.as_context_mut().store.alloc_trampoline(trampoline);
+        let host_func = HostFuncEntity::new(ctx.as_context().engine(), &ty, func);
         ctx.as_context_mut()
             .store
             .inner
-            .alloc_func(HostFuncEntity::new(ty_dedup, func).into())
+            .alloc_func(host_func.into())
     }
 
     /// Creates a new host function from the given closure.
     pub fn wrap<T, Params, Results>(
-        mut ctx: impl AsContextMut<UserState = T>,
+        mut ctx: impl AsContextMut<Data = T>,
         func: impl IntoFunc<T, Params, Results>,
     ) -> Self {
-        let engine = ctx.as_context().store.engine();
-        let host_func = HostFuncTrampolineEntity::wrap(engine, func);
-        let ty_dedup = *host_func.ty_dedup();
+        let host_func = HostFuncTrampolineEntity::wrap(func);
+        let ty = host_func.func_type();
         let trampoline = host_func.trampoline().clone();
         let func = ctx.as_context_mut().store.alloc_trampoline(trampoline);
+        let host_func = HostFuncEntity::new(ctx.as_context().engine(), ty, func);
         ctx.as_context_mut()
             .store
             .inner
-            .alloc_func(HostFuncEntity::new(ty_dedup, func).into())
+            .alloc_func(host_func.into())
     }
 
     /// Returns the signature of the function.
@@ -397,9 +410,9 @@ impl Func {
     ///   outputs required by the function signature of `self`.
     pub fn call<T>(
         &self,
-        mut ctx: impl AsContextMut<UserState = T>,
-        inputs: &[Value],
-        outputs: &mut [Value],
+        mut ctx: impl AsContextMut<Data = T>,
+        inputs: &[Val],
+        outputs: &mut [Val],
     ) -> Result<(), Error> {
         self.verify_and_prepare_inputs_outputs(ctx.as_context(), inputs, outputs)?;
         // Note: Cloning an [`Engine`] is intentionally a cheap operation.
@@ -437,9 +450,9 @@ impl Func {
     ///   outputs required by the function signature of `self`.
     pub fn call_resumable<T>(
         &self,
-        mut ctx: impl AsContextMut<UserState = T>,
-        inputs: &[Value],
-        outputs: &mut [Value],
+        mut ctx: impl AsContextMut<Data = T>,
+        inputs: &[Val],
+        outputs: &mut [Val],
     ) -> Result<ResumableCall, Error> {
         self.verify_and_prepare_inputs_outputs(ctx.as_context(), inputs, outputs)?;
         // Note: Cloning an [`Engine`] is intentionally a cheap operation.
@@ -468,8 +481,8 @@ impl Func {
     fn verify_and_prepare_inputs_outputs(
         &self,
         ctx: impl AsContext,
-        inputs: &[Value],
-        outputs: &mut [Value],
+        inputs: &[Val],
+        outputs: &mut [Val],
     ) -> Result<(), FuncError> {
         let fn_type = self.ty_dedup(ctx.as_context());
         ctx.as_context()

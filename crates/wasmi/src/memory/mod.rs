@@ -12,11 +12,11 @@ pub use self::{
 };
 use super::{AsContext, AsContextMut, StoreContext, StoreContextMut, Stored};
 use crate::{
+    collections::arena::ArenaIndex,
+    core::{Pages, TrapCode},
     error::EntityGrowError,
     store::{Fuel, ResourceLimiterRef},
 };
-use wasmi_arena::ArenaIndex;
-use wasmi_core::{Pages, TrapCode};
 
 /// A raw index to a linear memory entity.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,6 +165,45 @@ impl MemoryEntity {
         }
     }
 
+    /// Creates a new memory entity with the given memory type.
+    pub fn new_static(
+        memory_type: MemoryType,
+        limiter: &mut ResourceLimiterRef<'_>,
+        buf: &'static mut [u8],
+    ) -> Result<Self, MemoryError> {
+        let initial_pages = memory_type.initial_pages();
+        let initial_len = initial_pages.to_bytes();
+        let maximum_pages = memory_type.maximum_pages().unwrap_or_else(Pages::max);
+        let maximum_len = maximum_pages.to_bytes();
+
+        if let Some(limiter) = limiter.as_resource_limiter() {
+            if !limiter.memory_growing(0, initial_len.unwrap_or(usize::MAX), maximum_len)? {
+                // Here there's no meaningful way to map Ok(false) to
+                // INVALID_GROWTH_ERRCODE, so we just translate it to an
+                // appropriate Err(...)
+                return Err(MemoryError::OutOfBoundsAllocation);
+            }
+        }
+
+        if let Some(initial_len) = initial_len {
+            if buf.len() < initial_len {
+                return Err(MemoryError::InvalidStaticBufferSize);
+            }
+            let memory = Self {
+                bytes: ByteBuffer::new_static(buf, initial_len),
+                memory_type,
+                current_pages: initial_pages,
+            };
+            Ok(memory)
+        } else {
+            let err = MemoryError::OutOfBoundsAllocation;
+            if let Some(limiter) = limiter.as_resource_limiter() {
+                limiter.memory_grow_failed(&err)
+            }
+            Err(err)
+        }
+    }
+
     /// Returns the memory type of the linear memory.
     pub fn ty(&self) -> MemoryType {
         self.memory_type
@@ -184,8 +223,13 @@ impl MemoryEntity {
     }
 
     /// Returns the amount of pages in use by the linear memory.
-    pub fn current_pages(&self) -> Pages {
+    fn current_pages(&self) -> Pages {
         self.current_pages
+    }
+
+    /// Returns the size, in WebAssembly pages, of this Wasm linear memory.
+    pub fn size(&self) -> u32 {
+        self.current_pages.into()
     }
 
     /// Grows the linear memory by the given amount of new pages.
@@ -198,26 +242,28 @@ impl MemoryEntity {
     /// the grow operation.
     pub fn grow(
         &mut self,
-        additional: Pages,
+        additional: u32,
         fuel: Option<&mut Fuel>,
         limiter: &mut ResourceLimiterRef<'_>,
-    ) -> Result<Pages, EntityGrowError> {
+    ) -> Result<u32, EntityGrowError> {
         fn notify_limiter(
             limiter: &mut ResourceLimiterRef<'_>,
             err: EntityGrowError,
-        ) -> Result<Pages, EntityGrowError> {
+        ) -> Result<u32, EntityGrowError> {
             if let Some(limiter) = limiter.as_resource_limiter() {
                 limiter.memory_grow_failed(&MemoryError::OutOfBoundsGrowth)
             }
             Err(err)
         }
 
-        let current_pages = self.current_pages();
-        if additional == Pages::from(0) {
-            // Nothing to do in this case. Bail out early.
-            return Ok(current_pages);
+        if additional == 0 {
+            return Ok(self.size());
         }
+        let Some(additional) = Pages::new(additional) else {
+            return Err(EntityGrowError::InvalidGrow);
+        };
 
+        let current_pages = self.current_pages();
         let maximum_pages = self.ty().maximum_pages().unwrap_or_else(Pages::max);
         let desired_pages = current_pages.checked_add(additional);
 
@@ -261,7 +307,7 @@ impl MemoryEntity {
         // 3. There is enough fuel for the operation.
         self.bytes.grow(new_size);
         self.current_pages = new_pages;
-        Ok(current_pages)
+        Ok(u32::from(current_pages))
     }
 
     /// Returns a shared slice to the bytes underlying to the byte buffer.
@@ -272,6 +318,18 @@ impl MemoryEntity {
     /// Returns an exclusive slice to the bytes underlying to the byte buffer.
     pub fn data_mut(&mut self) -> &mut [u8] {
         self.bytes.data_mut()
+    }
+
+    /// Returns the base pointer, in the host’s address space, that the [`Memory`] is located at.
+    pub fn data_ptr(&self) -> *mut u8 {
+        self.bytes.ptr
+    }
+
+    /// Returns the byte length of this [`Memory`].
+    ///
+    /// The returned value will be a multiple of the wasm page size, 64k.
+    pub fn data_size(&self) -> usize {
+        self.bytes.len
     }
 
     /// Reads `n` bytes from `memory[offset..offset+n]` into `buffer`
@@ -339,6 +397,27 @@ impl Memory {
         Ok(memory)
     }
 
+    /// Creates a new linear memory to the store.
+    ///
+    /// # Errors
+    ///
+    /// If more than [`u32::MAX`] much linear memory is allocated.
+    /// - If static buffer is invalid
+    pub fn new_static(
+        mut ctx: impl AsContextMut,
+        ty: MemoryType,
+        buf: &'static mut [u8],
+    ) -> Result<Self, MemoryError> {
+        let (inner, mut resource_limiter) = ctx
+            .as_context_mut()
+            .store
+            .store_inner_and_resource_limiter_ref();
+
+        let entity = MemoryEntity::new_static(ty, &mut resource_limiter, buf)?;
+        let memory = inner.alloc_memory(entity);
+        Ok(memory)
+    }
+
     /// Returns the memory type of the linear memory.
     ///
     /// # Panics
@@ -366,17 +445,13 @@ impl Memory {
             .dynamic_ty()
     }
 
-    /// Returns the amount of pages in use by the linear memory.
+    /// Returns the size, in WebAssembly pages, of this Wasm linear memory.
     ///
     /// # Panics
     ///
     /// Panics if `ctx` does not own this [`Memory`].
-    pub fn current_pages(&self, ctx: impl AsContext) -> Pages {
-        ctx.as_context()
-            .store
-            .inner
-            .resolve_memory(self)
-            .current_pages()
+    pub fn size(&self, ctx: impl AsContext) -> u32 {
+        ctx.as_context().store.inner.resolve_memory(self).size()
     }
 
     /// Grows the linear memory by the given amount of new pages.
@@ -391,11 +466,7 @@ impl Memory {
     /// # Panics
     ///
     /// Panics if `ctx` does not own this [`Memory`].
-    pub fn grow(
-        &self,
-        mut ctx: impl AsContextMut,
-        additional: Pages,
-    ) -> Result<Pages, MemoryError> {
+    pub fn grow(&self, mut ctx: impl AsContextMut, additional: u32) -> Result<u32, MemoryError> {
         let (inner, mut limiter) = ctx
             .as_context_mut()
             .store
@@ -436,6 +507,30 @@ impl Memory {
     ) -> (&'a mut [u8], &'a mut T) {
         let (memory, store) = ctx.into().store.resolve_memory_and_state_mut(self);
         (memory.data_mut(), store)
+    }
+
+    /// Returns the base pointer, in the host’s address space, that the [`Memory`] is located at.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ctx` does not own this [`Memory`].
+    pub fn data_ptr(&self, ctx: impl AsContext) -> *mut u8 {
+        ctx.as_context().store.inner.resolve_memory(self).data_ptr()
+    }
+
+    /// Returns the byte length of this [`Memory`].
+    ///
+    /// The returned value will be a multiple of the wasm page size, 64k.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ctx` does not own this [`Memory`].
+    pub fn data_size(&self, ctx: impl AsContext) -> usize {
+        ctx.as_context()
+            .store
+            .inner
+            .resolve_memory(self)
+            .data_size()
     }
 
     /// Reads `n` bytes from `memory[offset..offset+n]` into `buffer`

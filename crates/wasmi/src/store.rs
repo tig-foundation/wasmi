@@ -1,22 +1,22 @@
 use crate::{
+    collections::arena::{Arena, ArenaIndex, GuardedEntity},
+    core::TrapCode,
     engine::{DedupFuncType, FuelCosts},
     externref::{ExternObject, ExternObjectEntity, ExternObjectIdx},
     func::{Trampoline, TrampolineEntity, TrampolineIdx},
     memory::{DataSegment, MemoryError},
     module::InstantiationError,
     table::TableError,
-    DataSegmentEntity, DataSegmentIdx, ElementSegment, ElementSegmentEntity, ElementSegmentIdx,
-    Engine, Func, FuncEntity, FuncIdx, FuncType, Global, GlobalEntity, GlobalIdx, Instance,
-    InstanceEntity, InstanceIdx, Memory, MemoryEntity, MemoryIdx, ResourceLimiter, Table,
-    TableEntity, TableIdx,
+    Config, DataSegmentEntity, DataSegmentIdx, ElementSegment, ElementSegmentEntity,
+    ElementSegmentIdx, Engine, Func, FuncEntity, FuncIdx, FuncType, Global, GlobalEntity,
+    GlobalIdx, Instance, InstanceEntity, InstanceIdx, Memory, MemoryEntity, MemoryIdx,
+    ResourceLimiter, Table, TableEntity, TableIdx,
 };
-use alloc::boxed::Box;
 use core::{
     fmt::{self, Debug},
     sync::atomic::{AtomicU32, Ordering},
 };
-use wasmi_arena::{Arena, ArenaIndex, GuardedEntity};
-use wasmi_core::TrapCode;
+use std::boxed::Box;
 
 /// A unique store index.
 ///
@@ -156,6 +156,9 @@ pub enum FuelError {
     OutOfFuel,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for FuelError {}
+
 impl fmt::Display for FuelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -192,8 +195,6 @@ impl FuelError {
 pub struct Fuel {
     /// The remaining fuel.
     remaining: u64,
-    /// The total amount of fuel so far.
-    total: u64,
     /// This is `true` if fuel metering is enabled for the [`Engine`].
     enabled: bool,
     /// The fuel costs provided by the [`Engine`]'s [`Config`].
@@ -204,13 +205,11 @@ pub struct Fuel {
 
 impl Fuel {
     /// Creates a new [`Fuel`] for the [`Engine`].
-    pub fn new(engine: &Engine) -> Self {
-        let config = engine.config();
+    pub fn new(config: &Config) -> Self {
         let enabled = config.get_consume_fuel();
         let costs = *config.fuel_costs();
         Self {
             remaining: 0,
-            total: 0,
             enabled,
             costs,
         }
@@ -235,33 +234,25 @@ impl Fuel {
         Ok(())
     }
 
-    /// Adds `delta` quantity of fuel to the remaining [`Fuel`].
-    ///
-    /// # Panics
-    ///
-    /// If this overflows the [`Fuel`] counter.
+    /// Sets the remaining fuel to `fuel`.
     ///
     /// # Errors
     ///
     /// If fuel metering is disabled.
-    pub fn add_fuel(&mut self, delta: u64) -> Result<(), FuelError> {
+    pub fn set_fuel(&mut self, fuel: u64) -> Result<(), FuelError> {
         self.check_fuel_metering_enabled()?;
-        self.total = self.total.checked_add(delta).unwrap_or_else(|| {
-            panic!(
-                "encountered total fuel overflow: fuel = {}, delta = {delta}",
-                self.total
-            )
-        });
-        // No need to check as well since `self.total >= self.remaining`.
-        self.remaining = self.remaining.wrapping_add(delta);
+        self.remaining = fuel;
         Ok(())
     }
 
-    /// Returns the amount of [`Fuel`] consumed by executions of the [`Store`] so far.
-    pub fn fuel_consumed(&self) -> Option<u64> {
-        self.check_fuel_metering_enabled().ok()?;
-        let consumed = self.total.wrapping_sub(self.remaining);
-        Some(consumed)
+    /// Returns the remaining fuel.
+    ///
+    /// # Errors
+    ///
+    /// If fuel metering is disabled.
+    pub fn get_fuel(&self) -> Result<u64, FuelError> {
+        self.check_fuel_metering_enabled()?;
+        Ok(self.remaining)
     }
 
     /// Synthetically consumes an amount of [`Fuel`] from the [`Store`].
@@ -295,7 +286,10 @@ impl Fuel {
     ///
     /// - If fuel metering is disabled.
     /// - If out of fuel.
-    pub fn consume_fuel(&mut self, f: impl FnOnce(&FuelCosts) -> u64) -> Result<u64, FuelError> {
+    pub(crate) fn consume_fuel(
+        &mut self,
+        f: impl FnOnce(&FuelCosts) -> u64,
+    ) -> Result<u64, FuelError> {
         self.check_fuel_metering_enabled()?;
         self.consume_fuel_unchecked(f(&self.costs))
             .map_err(|_| FuelError::OutOfFuel)
@@ -324,7 +318,7 @@ impl Fuel {
 impl StoreInner {
     /// Creates a new [`StoreInner`] for the given [`Engine`].
     pub fn new(engine: &Engine) -> Self {
-        let fuel = Fuel::new(engine);
+        let fuel = Fuel::new(engine.config());
         StoreInner {
             engine: engine.clone(),
             store_idx: StoreIdx::new(),
@@ -676,7 +670,6 @@ impl StoreInner {
     ///
     /// - If the [`ElementSegment`] does not originate from this [`Store`].
     /// - If the [`ElementSegment`] cannot be resolved to its entity.
-    #[allow(unused)] // Note: We allow this unused API to exist to uphold code symmetry.
     pub fn resolve_element_segment(&self, segment: &ElementSegment) -> &ElementSegmentEntity {
         self.resolve(segment.as_inner(), &self.elems)
     }
@@ -732,35 +725,20 @@ impl StoreInner {
         (memory, fuel)
     }
 
-    /// Returns the triple of:
-    ///
-    /// - An exclusive reference to the [`MemoryEntity`] associated to the given [`Memory`].
-    /// - A shared reference to the [`DataSegmentEntity`] associated to the given [`DataSegment`].
-    /// - An exclusive reference to the [`Fuel`] for fuel metering.
-    ///
-    ///
-    /// # Note
-    ///
-    /// This method exists to properly handle use cases where
-    /// otherwise the Rust borrow-checker would not accept.
+    /// Returns an exclusive reference to the [`DataSegmentEntity`] associated to the given [`Memory`].
     ///
     /// # Panics
     ///
-    /// - If the [`Memory`] does not originate from this [`Store`].
-    /// - If the [`Memory`] cannot be resolved to its entity.
     /// - If the [`DataSegment`] does not originate from this [`Store`].
     /// - If the [`DataSegment`] cannot be resolved to its entity.
-    pub(super) fn resolve_memory_init_triplet(
+    pub fn resolve_data_and_fuel_mut(
         &mut self,
-        memory: &Memory,
-        segment: &DataSegment,
-    ) -> (&mut MemoryEntity, &DataSegmentEntity, &mut Fuel) {
-        let mem_idx = self.unwrap_stored(memory.as_inner());
-        let data_idx = segment.as_inner();
-        let data = self.resolve(data_idx, &self.datas);
-        let mem = Self::resolve_mut(mem_idx, &mut self.memories);
+        data: &DataSegment,
+    ) -> (&mut DataSegmentEntity, &mut Fuel) {
+        let idx = self.unwrap_stored(data.as_inner());
+        let data_segment = Self::resolve_mut(idx, &mut self.datas);
         let fuel = &mut self.fuel;
-        (mem, data, fuel)
+        (data_segment, fuel)
     }
 
     /// Returns an exclusive reference to the [`DataSegmentEntity`] associated to the given [`DataSegment`].
@@ -819,6 +797,21 @@ impl StoreInner {
 
     pub fn set_runtime_signature(&mut self, runtime_signature: u64) {
         self.runtime_signature = runtime_signature;
+    }
+}
+
+impl<T> Default for Store<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        let engine = Engine::default();
+        Self {
+            inner: StoreInner::new(&engine),
+            trampolines: Arena::new(),
+            data: T::default(),
+            limiter: None,
+        }
     }
 }
 
@@ -912,40 +905,30 @@ impl<T> Store<T> {
         (&mut self.inner, resource_limiter)
     }
 
-    /// Adds `delta` quantity of fuel to the remaining fuel.
+    /// Returns the remaining fuel of the [`Store`] if fuel metering is enabled.
     ///
-    /// # Panics
+    /// # Note
     ///
-    /// If this overflows the remaining fuel counter.
+    /// Enable fuel metering via [`Config::consume_fuel`](crate::Config::consume_fuel).
     ///
     /// # Errors
     ///
     /// If fuel metering is disabled.
-    pub fn add_fuel(&mut self, delta: u64) -> Result<(), FuelError> {
-        self.inner.fuel.add_fuel(delta)
+    pub fn get_fuel(&self) -> Result<u64, FuelError> {
+        self.inner.fuel.get_fuel()
     }
 
-    /// Returns the amount of fuel consumed by executions of the [`Store`] so far.
+    /// Sets the remaining fuel of the [`Store`] to `value` if fuel metering is enabled.
     ///
-    /// Returns `None` if fuel metering is disabled.
-    pub fn fuel_consumed(&self) -> Option<u64> {
-        self.inner.fuel.fuel_consumed()
-    }
-
-    /// Synthetically consumes an amount of fuel for the [`Store`].
+    /// # Note
     ///
-    /// Returns the remaining amount of fuel after this operation.
-    ///
-    /// # Panics
-    ///
-    /// If this overflows the consumed fuel counter.
+    /// Enable fuel metering via [`Config::consume_fuel`](crate::Config::consume_fuel).
     ///
     /// # Errors
     ///
-    /// - If fuel metering is disabled.
-    /// - If more fuel is consumed than available.
-    pub fn consume_fuel(&mut self, delta: u64) -> Result<u64, FuelError> {
-        self.inner.fuel.consume_fuel(|_| delta)
+    /// If fuel metering is disabled.
+    pub fn set_fuel(&mut self, fuel: u64) -> Result<(), FuelError> {
+        self.inner.fuel.set_fuel(fuel)
     }
 
     /// Allocates a new [`TrampolineEntity`] and returns a [`Trampoline`] reference to it.
@@ -998,16 +981,16 @@ impl<T> Store<T> {
 /// A trait used to get shared access to a [`Store`] in Wasmi.
 pub trait AsContext {
     /// The user state associated with the [`Store`], aka the `T` in `Store<T>`.
-    type UserState;
+    type Data;
 
     /// Returns the store context that this type provides access to.
-    fn as_context(&self) -> StoreContext<Self::UserState>;
+    fn as_context(&self) -> StoreContext<Self::Data>;
 }
 
 /// A trait used to get exclusive access to a [`Store`] in Wasmi.
 pub trait AsContextMut: AsContext {
     /// Returns the store context that this type provides access to.
-    fn as_context_mut(&mut self) -> StoreContextMut<Self::UserState>;
+    fn as_context_mut(&mut self) -> StoreContextMut<Self::Data>;
 }
 
 /// A temporary handle to a [`&Store<T>`][`Store`].
@@ -1032,23 +1015,34 @@ impl<'a, T> StoreContext<'a, T> {
     pub fn data(&self) -> &T {
         self.store.data()
     }
+
+    /// Returns the remaining fuel of the [`Store`] if fuel metering is enabled.
+    ///
+    /// For more information see [`Store::get_fuel`](crate::Store::get_fuel).
+    ///
+    /// # Errors
+    ///
+    /// If fuel metering is disabled.
+    pub fn get_fuel(&self) -> Result<u64, FuelError> {
+        self.store.get_fuel()
+    }
 }
 
-impl<'a, T: AsContext> From<&'a T> for StoreContext<'a, T::UserState> {
+impl<'a, T: AsContext> From<&'a T> for StoreContext<'a, T::Data> {
     #[inline]
     fn from(ctx: &'a T) -> Self {
         ctx.as_context()
     }
 }
 
-impl<'a, T: AsContext> From<&'a mut T> for StoreContext<'a, T::UserState> {
+impl<'a, T: AsContext> From<&'a mut T> for StoreContext<'a, T::Data> {
     #[inline]
     fn from(ctx: &'a mut T) -> Self {
         T::as_context(ctx)
     }
 }
 
-impl<'a, T: AsContextMut> From<&'a mut T> for StoreContextMut<'a, T::UserState> {
+impl<'a, T: AsContextMut> From<&'a mut T> for StoreContextMut<'a, T::Data> {
     #[inline]
     fn from(ctx: &'a mut T) -> Self {
         ctx.as_context_mut()
@@ -1084,16 +1078,38 @@ impl<'a, T> StoreContextMut<'a, T> {
     pub fn data_mut(&mut self) -> &mut T {
         self.store.data_mut()
     }
+
+    /// Returns the remaining fuel of the [`Store`] if fuel metering is enabled.
+    ///
+    /// For more information see [`Store::get_fuel`](crate::Store::get_fuel).
+    ///
+    /// # Errors
+    ///
+    /// If fuel metering is disabled.
+    pub fn get_fuel(&self) -> Result<u64, FuelError> {
+        self.store.get_fuel()
+    }
+
+    /// Sets the remaining fuel of the [`Store`] to `value` if fuel metering is enabled.
+    ///
+    /// For more information see [`Store::get_fuel`](crate::Store::set_fuel).
+    ///
+    /// # Errors
+    ///
+    /// If fuel metering is disabled.
+    pub fn set_fuel(&mut self, fuel: u64) -> Result<(), FuelError> {
+        self.store.set_fuel(fuel)
+    }
 }
 
 impl<T> AsContext for &'_ T
 where
     T: AsContext,
 {
-    type UserState = T::UserState;
+    type Data = T::Data;
 
     #[inline]
-    fn as_context(&self) -> StoreContext<'_, T::UserState> {
+    fn as_context(&self) -> StoreContext<'_, T::Data> {
         T::as_context(*self)
     }
 }
@@ -1102,10 +1118,10 @@ impl<T> AsContext for &'_ mut T
 where
     T: AsContext,
 {
-    type UserState = T::UserState;
+    type Data = T::Data;
 
     #[inline]
-    fn as_context(&self) -> StoreContext<'_, T::UserState> {
+    fn as_context(&self) -> StoreContext<'_, T::Data> {
         T::as_context(*self)
     }
 }
@@ -1115,32 +1131,32 @@ where
     T: AsContextMut,
 {
     #[inline]
-    fn as_context_mut(&mut self) -> StoreContextMut<'_, T::UserState> {
+    fn as_context_mut(&mut self) -> StoreContextMut<'_, T::Data> {
         T::as_context_mut(*self)
     }
 }
 
 impl<T> AsContext for StoreContext<'_, T> {
-    type UserState = T;
+    type Data = T;
 
     #[inline]
-    fn as_context(&self) -> StoreContext<'_, Self::UserState> {
+    fn as_context(&self) -> StoreContext<'_, Self::Data> {
         StoreContext { store: self.store }
     }
 }
 
 impl<T> AsContext for StoreContextMut<'_, T> {
-    type UserState = T;
+    type Data = T;
 
     #[inline]
-    fn as_context(&self) -> StoreContext<'_, Self::UserState> {
+    fn as_context(&self) -> StoreContext<'_, Self::Data> {
         StoreContext { store: self.store }
     }
 }
 
 impl<T> AsContextMut for StoreContextMut<'_, T> {
     #[inline]
-    fn as_context_mut(&mut self) -> StoreContextMut<'_, Self::UserState> {
+    fn as_context_mut(&mut self) -> StoreContextMut<'_, Self::Data> {
         StoreContextMut {
             store: &mut *self.store,
         }
@@ -1148,17 +1164,17 @@ impl<T> AsContextMut for StoreContextMut<'_, T> {
 }
 
 impl<T> AsContext for Store<T> {
-    type UserState = T;
+    type Data = T;
 
     #[inline]
-    fn as_context(&self) -> StoreContext<'_, Self::UserState> {
+    fn as_context(&self) -> StoreContext<'_, Self::Data> {
         StoreContext { store: self }
     }
 }
 
 impl<T> AsContextMut for Store<T> {
     #[inline]
-    fn as_context_mut(&mut self) -> StoreContextMut<'_, Self::UserState> {
+    fn as_context_mut(&mut self) -> StoreContextMut<'_, Self::Data> {
         StoreContextMut { store: self }
     }
 }

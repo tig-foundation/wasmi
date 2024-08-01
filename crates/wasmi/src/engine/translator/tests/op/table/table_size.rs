@@ -1,9 +1,9 @@
 use super::*;
-use crate::core::ValueType;
+use crate::core::ValType;
 
-fn test_reg(ty: ValueType) {
+fn test_reg(ty: ValType) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -11,8 +11,8 @@ fn test_reg(ty: ValueType) {
                 (table.size $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_size(Register::from_i16(0), 0),
             Instruction::return_reg(Register::from_i16(0)),
@@ -23,6 +23,6 @@ fn test_reg(ty: ValueType) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg() {
-    test_reg(ValueType::FuncRef);
-    test_reg(ValueType::ExternRef);
+    test_reg(ValType::FuncRef);
+    test_reg(ValType::ExternRef);
 }

@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 #![warn(
     clippy::cast_lossless,
     clippy::missing_errors_doc,
@@ -11,6 +11,7 @@
     clippy::items_after_statements
 )]
 
+pub mod hint;
 mod host_error;
 mod nan_preserving_float;
 mod trap;
@@ -19,10 +20,10 @@ mod untyped;
 mod value;
 
 #[cfg(not(feature = "std"))]
-extern crate alloc;
+extern crate alloc as std;
 
 #[cfg(feature = "std")]
-extern crate std as alloc;
+extern crate std;
 
 use self::value::{
     ArithmeticOps,
@@ -40,6 +41,6 @@ pub use self::{
     nan_preserving_float::{F32, F64},
     trap::{Trap, TrapCode},
     units::Pages,
-    untyped::{DecodeUntypedSlice, EncodeUntypedSlice, UntypedError, UntypedValue},
-    value::ValueType,
+    untyped::{DecodeUntypedSlice, EncodeUntypedSlice, UntypedError, UntypedVal},
+    value::ValType,
 };

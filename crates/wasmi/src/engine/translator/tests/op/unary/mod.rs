@@ -4,21 +4,20 @@ mod conversion;
 mod op;
 
 use super::*;
-use crate::engine::translator::tests::driver::{ExpectedFunc, TranslationTest};
+use crate::core::{TrapCode, UntypedVal};
 use std::fmt::Display;
-use wasm_type::WasmType;
-use wasmi_core::{TrapCode, UntypedValue};
+use wasm_type::WasmTy;
 
 /// Asserts that the unary Wasm operator `wasm_op` translates properly to a unary Wasmi instruction.
 fn conversion_reg_with<I, O, E>(wasm_op: &str, expected: E)
 where
-    I: WasmType,
-    O: WasmType,
+    I: WasmTy,
+    O: WasmTy,
     E: IntoIterator<Item = Instruction>,
 {
-    let param_ty = <I as WasmType>::NAME;
-    let result_ty = <O as WasmType>::NAME;
-    let wasm = wat2wasm(&format!(
+    let param_ty = <I as WasmTy>::NAME;
+    let result_ty = <O as WasmTy>::NAME;
+    let wasm = format!(
         r#"
         (module
             (func (param {param_ty}) (result {result_ty})
@@ -27,8 +26,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs(expected)
         .run();
 }
@@ -38,8 +37,8 @@ fn conversion_reg<I, O>(
     wasm_op: &str,
     make_instr: fn(result: Register, input: Register) -> Instruction,
 ) where
-    I: WasmType,
-    O: WasmType,
+    I: WasmTy,
+    O: WasmTy,
 {
     let expected = [
         make_instr(Register::from_i16(1), Register::from_i16(0)),
@@ -51,7 +50,7 @@ fn conversion_reg<I, O>(
 /// Asserts that the unary Wasm operator `wasm_op` translates properly to a unary Wasmi instruction.
 fn unary_reg<T>(wasm_op: &str, make_instr: fn(result: Register, input: Register) -> Instruction)
 where
-    T: WasmType,
+    T: WasmTy,
 {
     conversion_reg::<T, T>(wasm_op, make_instr)
 }
@@ -59,14 +58,14 @@ where
 /// Asserts that the unary Wasm operator `wasm_op` translates properly to a unary Wasmi instruction.
 fn conversion_imm<I, O>(wasm_op: &str, input: I, eval: fn(input: I) -> O)
 where
-    I: WasmType,
-    O: WasmType,
+    I: WasmTy,
+    O: WasmTy,
     DisplayWasm<I>: Display,
 {
-    let param_ty = <I as WasmType>::NAME;
-    let result_ty = <O as WasmType>::NAME;
+    let param_ty = <I as WasmTy>::NAME;
+    let result_ty = <O as WasmTy>::NAME;
     let wasm_input = DisplayWasm::from(input);
-    let wasm: Vec<u8> = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (result {result_ty})
@@ -75,10 +74,10 @@ where
             )
         )
     "#,
-    ));
+    );
     let result = eval(input);
-    let instr = <O as WasmType>::return_imm_instr(&result);
-    let mut testcase = TranslationTest::new(wasm);
+    let instr = <O as WasmTy>::return_imm_instr(&result);
+    let mut testcase = TranslationTest::from_wat(&wasm);
     if let Instruction::ReturnReg { value } = &instr {
         assert!(value.is_const());
         testcase.expect_func(ExpectedFunc::new([instr]).consts([result]));
@@ -91,7 +90,7 @@ where
 /// Asserts that the unary Wasm operator `wasm_op` translates properly to a unary Wasmi instruction.
 fn unary_imm<T>(wasm_op: &str, input: T, eval: fn(input: T) -> T)
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     conversion_imm::<T, T>(wasm_op, input, eval)
@@ -100,14 +99,14 @@ where
 /// Asserts that the unary Wasm operator `wasm_op` translates properly to a unary Wasmi instruction.
 fn fallible_conversion_imm_err<I, O>(wasm_op: &str, input: I, eval: fn(input: I) -> TrapCode)
 where
-    I: WasmType,
-    O: WasmType,
+    I: WasmTy,
+    O: WasmTy,
     DisplayWasm<I>: Display,
 {
-    let param_ty = <I as WasmType>::NAME;
-    let result_ty = <O as WasmType>::NAME;
+    let param_ty = <I as WasmTy>::NAME;
+    let result_ty = <O as WasmTy>::NAME;
     let wasm_input = DisplayWasm::from(input);
-    let wasm: Vec<u8> = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (result {result_ty})
@@ -116,9 +115,9 @@ where
             )
         )
     "#,
-    ));
+    );
     let trap_code = eval(input);
-    TranslationTest::new(wasm)
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([Instruction::Trap(trap_code)])
         .run();
 }

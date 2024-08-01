@@ -1,9 +1,9 @@
 use super::*;
-use crate::core::ValueType;
+use crate::core::ValType;
 
-fn test_reg(ty: ValueType) {
+fn test_reg(ty: ValType) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -12,8 +12,8 @@ fn test_reg(ty: ValueType) {
                 (table.get $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_get(Register::from_i16(1), Register::from_i16(0)),
             Instruction::table_idx(0),
@@ -25,14 +25,14 @@ fn test_reg(ty: ValueType) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg() {
-    test_reg(ValueType::FuncRef);
-    test_reg(ValueType::ExternRef);
+    test_reg(ValType::FuncRef);
+    test_reg(ValType::ExternRef);
 }
 
-fn test_imm(ty: ValueType, index: u32) {
+fn test_imm(ty: ValType, index: u32) {
     let display_ty = DisplayValueType::from(ty);
     let display_index = DisplayWasm::from(index);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -41,8 +41,8 @@ fn test_imm(ty: ValueType, index: u32) {
                 (table.get $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_get_imm(Register::from_i16(0), index),
             Instruction::table_idx(0),
@@ -55,8 +55,8 @@ fn test_imm(ty: ValueType, index: u32) {
 #[cfg_attr(miri, ignore)]
 fn imm() {
     fn test_for(index: u32) {
-        test_imm(ValueType::FuncRef, index);
-        test_imm(ValueType::ExternRef, index);
+        test_imm(ValType::FuncRef, index);
+        test_imm(ValType::ExternRef, index);
     }
     test_for(0);
     test_for(1);

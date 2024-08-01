@@ -1,6 +1,6 @@
-use super::StackLimits;
+use super::{EnforcedLimits, StackLimits};
+use crate::core::UntypedVal;
 use core::{mem::size_of, num::NonZeroU64};
-use wasmi_core::UntypedValue;
 use wasmparser::WasmFeatures;
 
 /// The default amount of stacks kept in the cache at most.
@@ -35,12 +35,16 @@ pub struct Config {
     floats: bool,
     /// Is `true` if Wasmi executions shall consume fuel.
     consume_fuel: bool,
+    /// Is `true` if Wasmi shall ignore Wasm custom sections when parsing Wasm modules.
+    ignore_custom_sections: bool,
     /// The configured fuel costs of all Wasmi bytecode instructions.
     fuel_costs: FuelCosts,
     /// The mode of Wasm to Wasmi bytecode compilation.
     compilation_mode: CompilationMode,
     /// Is `true` if Wasmi executions shall generate a runtime signature.
     update_runtime_signature: bool,
+    /// Enforced limits for Wasm module parsing and compilation.
+    limits: EnforcedLimits,
 }
 
 /// Type storing all kinds of fuel costs of instructions.
@@ -136,7 +140,7 @@ impl FuelCosts {
 impl Default for FuelCosts {
     fn default() -> Self {
         let bytes_per_fuel = 64;
-        let bytes_per_register = size_of::<UntypedValue>() as u64;
+        let bytes_per_register = size_of::<UntypedVal>() as u64;
         let registers_per_fuel = bytes_per_fuel / bytes_per_register;
         Self {
             base: 1,
@@ -176,13 +180,15 @@ impl Default for Config {
             multi_value: true,
             bulk_memory: true,
             reference_types: true,
-            tail_call: false,
-            extended_const: false,
+            tail_call: true,
+            extended_const: true,
             floats: true,
             consume_fuel: false,
+            ignore_custom_sections: false,
             fuel_costs: FuelCosts::default(),
             compilation_mode: CompilationMode::default(),
             update_runtime_signature: false,
+            limits: EnforcedLimits::default(),
         }
     }
 }
@@ -291,9 +297,9 @@ impl Config {
     ///
     /// # Note
     ///
-    /// Disabled by default.
+    /// Enabled by default.
     ///
-    /// [`tail-call`]: https://github.com/WebAssembly/tail-calls
+    /// [`tail-call`]: https://github.com/WebAssembly/tail-call
     pub fn wasm_tail_call(&mut self, enable: bool) -> &mut Self {
         self.tail_call = enable;
         self
@@ -303,9 +309,9 @@ impl Config {
     ///
     /// # Note
     ///
-    /// Disabled by default.
+    /// Enabled by default.
     ///
-    /// [`tail-call`]: https://github.com/WebAssembly/extended-const
+    /// [`extended-const`]: https://github.com/WebAssembly/extended-const
     pub fn wasm_extended_const(&mut self, enable: bool) -> &mut Self {
         self.extended_const = enable;
         self
@@ -328,9 +334,9 @@ impl Config {
     /// a [`TrapCode::OutOfFuel`](crate::core::TrapCode::OutOfFuel) trap is raised.
     /// This way users can deterministically halt or yield the execution of WebAssembly code.
     ///
-    /// - Use [`Store::add_fuel`](crate::Store::add_fuel) to pour some fuel into the [`Store`] before
+    /// - Use [`Store::set_fuel`](crate::Store::set_fuel) to set the remaining fuel of the [`Store`] before
     ///   executing some code as the [`Store`] start with no fuel.
-    /// - Use [`Caller::consume_fuel`](crate::Caller::consume_fuel) to charge costs for executed host functions.
+    /// - Use [`Caller::set_fuel`](crate::Caller::set_fuel) to update the remaining fuel when executing host functions.
     ///
     /// Disabled by default.
     ///
@@ -357,12 +363,27 @@ impl Config {
         self.update_runtime_signature
     }
 
+    /// Configures whether Wasmi will ignore custom sections when parsing Wasm modules.
+    ///
+    /// Default value: `false`
+    pub fn ignore_custom_sections(&mut self, enable: bool) -> &mut Self {
+        self.ignore_custom_sections = enable;
+        self
+    }
+
+    /// Returns `true` if the [`Config`] mandates to ignore Wasm custom sections when parsing Wasm modules.
+    pub(crate) fn get_ignore_custom_sections(&self) -> bool {
+        self.ignore_custom_sections
+    }
+
     /// Returns the configured [`FuelCosts`].
     pub(crate) fn fuel_costs(&self) -> &FuelCosts {
         &self.fuel_costs
     }
 
     /// Sets the [`CompilationMode`] used for the [`Engine`].
+    ///
+    /// By default [`CompilationMode::Eager`] is used.
     ///
     /// [`Engine`]: crate::Engine
     pub fn compilation_mode(&mut self, mode: CompilationMode) -> &mut Self {
@@ -375,6 +396,23 @@ impl Config {
     /// [`Engine`]: crate::Engine
     pub(super) fn get_compilation_mode(&self) -> CompilationMode {
         self.compilation_mode
+    }
+
+    /// Sets the [`EnforcedLimits`] enforced by the [`Engine`] for Wasm module parsing and compilation.
+    ///
+    /// By default no limits are enforced.
+    ///
+    /// [`Engine`]: crate::Engine
+    pub fn enforced_limits(&mut self, limits: EnforcedLimits) -> &mut Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Returns the [`EnforcedLimits`] used for the [`Engine`].
+    ///
+    /// [`Engine`]: crate::Engine
+    pub(crate) fn get_enforced_limits(&self) -> &EnforcedLimits {
+        &self.limits
     }
 
     /// Returns the [`WasmFeatures`] represented by the [`Config`].

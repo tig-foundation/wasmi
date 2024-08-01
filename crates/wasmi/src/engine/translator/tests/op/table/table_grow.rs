@@ -1,9 +1,9 @@
 use super::*;
-use crate::core::ValueType;
+use crate::core::ValType;
 
-fn test_reg(ty: ValueType) {
+fn test_reg(ty: ValType) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -13,8 +13,8 @@ fn test_reg(ty: ValueType) {
                 (table.grow $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_grow(
                 Register::from_i16(2),
@@ -30,13 +30,13 @@ fn test_reg(ty: ValueType) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg() {
-    test_reg(ValueType::FuncRef);
-    test_reg(ValueType::ExternRef);
+    test_reg(ValType::FuncRef);
+    test_reg(ValType::ExternRef);
 }
 
-fn test_imm16(ty: ValueType, delta: u32) {
+fn test_imm16(ty: ValType, delta: u32) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -46,8 +46,8 @@ fn test_imm16(ty: ValueType, delta: u32) {
                 (table.grow $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_grow_imm(
                 Register::from_i16(1),
@@ -64,8 +64,8 @@ fn test_imm16(ty: ValueType, delta: u32) {
 #[cfg_attr(miri, ignore)]
 fn imm16() {
     fn test_for(delta: u32) {
-        test_imm16(ValueType::FuncRef, delta);
-        test_imm16(ValueType::ExternRef, delta);
+        test_imm16(ValType::FuncRef, delta);
+        test_imm16(ValType::ExternRef, delta);
     }
     test_for(1);
     test_for(42);
@@ -73,9 +73,9 @@ fn imm16() {
     test_for(u32::from(u16::MAX));
 }
 
-fn test_imm_zero(ty: ValueType) {
+fn test_imm_zero(ty: ValType) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -85,8 +85,8 @@ fn test_imm_zero(ty: ValueType) {
                 (table.grow $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_size(Register::from_i16(1), 0),
             Instruction::return_reg(Register::from_i16(1)),
@@ -97,18 +97,18 @@ fn test_imm_zero(ty: ValueType) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn imm_zero() {
-    test_imm_zero(ValueType::FuncRef);
-    test_imm_zero(ValueType::ExternRef);
+    test_imm_zero(ValType::FuncRef);
+    test_imm_zero(ValType::ExternRef);
 }
 
-fn test_imm_value_and_zero(ty: ValueType) {
+fn test_imm_value_and_zero(ty: ValType) {
     let display_ty: DisplayValueType = DisplayValueType::from(ty);
     let ref_ty = match ty {
-        ValueType::FuncRef => "func",
-        ValueType::ExternRef => "extern",
+        ValType::FuncRef => "func",
+        ValType::ExternRef => "extern",
         _ => panic!("invalid Wasm reftype"),
     };
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -118,8 +118,8 @@ fn test_imm_value_and_zero(ty: ValueType) {
                 (table.grow $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func_instrs([
             Instruction::table_size(Register::from_i16(1), 0),
             Instruction::return_reg(Register::from_i16(1)),
@@ -130,13 +130,13 @@ fn test_imm_value_and_zero(ty: ValueType) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn imm_value_and_zero() {
-    test_imm_value_and_zero(ValueType::FuncRef);
-    test_imm_value_and_zero(ValueType::ExternRef);
+    test_imm_value_and_zero(ValType::FuncRef);
+    test_imm_value_and_zero(ValType::ExternRef);
 }
 
-fn test_imm(ty: ValueType, delta: u32) {
+fn test_imm(ty: ValType, delta: u32) {
     let display_ty = DisplayValueType::from(ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r"
         (module
             (table $t 10 {display_ty})
@@ -146,8 +146,8 @@ fn test_imm(ty: ValueType, delta: u32) {
                 (table.grow $t)
             )
         )",
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
         .expect_func(
             ExpectedFunc::new([
                 Instruction::table_grow(
@@ -167,8 +167,8 @@ fn test_imm(ty: ValueType, delta: u32) {
 #[cfg_attr(miri, ignore)]
 fn imm() {
     fn test_for(delta: u32) {
-        test_imm(ValueType::FuncRef, delta);
-        test_imm(ValueType::ExternRef, delta);
+        test_imm(ValType::FuncRef, delta);
+        test_imm(ValType::ExternRef, delta);
     }
     test_for(u32::from(u16::MAX) + 1);
     test_for(u32::MAX - 1);

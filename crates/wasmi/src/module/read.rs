@@ -12,6 +12,9 @@ pub enum ReadError {
     UnknownError,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for ReadError {}
+
 impl Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -62,8 +65,9 @@ where
 impl<'a> Read for &'a [u8] {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, ReadError> {
         let len_copy = self.len().min(buffer.len());
-        buffer[..len_copy].copy_from_slice(&self[..len_copy]);
-        *self = &self[len_copy..];
+        let (read, rest) = self.split_at(len_copy);
+        buffer[..len_copy].copy_from_slice(read);
+        *self = rest;
         Ok(len_copy)
     }
 }

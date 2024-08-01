@@ -13,7 +13,7 @@ use crate::{
             SignatureIdx,
             UnaryInstr,
         },
-        CompiledFunc,
+        EngineFunc,
     },
     module::ModuleHeader,
     Engine,
@@ -444,7 +444,6 @@ impl Instruction {
             I::F64CopysignImm(instr) => relink_simple(instr, new_result, old_result),
 
             I::I32AddImm16(instr) |
-            I::I32SubImm16(instr) |
             I::I32SubImm16Rev(instr) |
             I::I32MulImm16(instr) => relink_simple(instr, new_result, old_result),
             I::I32DivSImm16(instr) => relink_simple(instr, new_result, old_result),
@@ -473,7 +472,6 @@ impl Instruction {
             I::I32RemUImm16Rev(instr) => relink_simple(instr, new_result, old_result),
 
             I::I64AddImm16(instr) |
-            I::I64SubImm16(instr) |
             I::I64SubImm16Rev(instr) |
             I::I64MulImm16(instr) => relink_simple(instr, new_result, old_result),
             I::I64DivSImm16(instr) => relink_simple(instr, new_result, old_result),
@@ -565,7 +563,7 @@ fn get_engine(module: &ModuleHeader) -> Engine {
 
 fn relink_call_internal(
     results: &mut RegisterSpan,
-    func: CompiledFunc,
+    func: EngineFunc,
     module: &ModuleHeader,
     new_result: Register,
     old_result: Register,
@@ -590,7 +588,7 @@ fn relink_call_imported(
     old_result: Register,
 ) -> Result<bool, Error> {
     let engine = get_engine(module);
-    let func_idx = func.to_u32().into();
+    let func_idx = u32::from(func).into();
     let func_type = module.get_type_of_func(func_idx);
     let len_results = engine.resolve_func_type(func_type, |func_type| func_type.results().len());
     if len_results != 1 {
@@ -607,7 +605,7 @@ fn relink_call_indirect(
     old_result: Register,
 ) -> Result<bool, Error> {
     let engine = get_engine(module);
-    let func_type_idx = func_type.to_u32().into();
+    let func_type_idx = u32::from(func_type).into();
     let func_type = module.get_func_type(func_type_idx);
     let len_results = engine.resolve_func_type(func_type, |func_type| func_type.results().len());
     if len_results != 1 {

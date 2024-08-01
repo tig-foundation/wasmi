@@ -1,29 +1,20 @@
 use super::*;
 use crate::{
-    core::UntypedValue,
-    engine::{
-        bytecode::BranchOffset,
-        translator::tests::{
-            display_wasm::DisplayValueType,
-            driver::ExpectedFunc,
-            wasm_type::WasmType,
-        },
-    },
+    core::UntypedVal,
+    engine::{bytecode::BranchOffset, translator::tests::wasm_type::WasmTy},
 };
 use core::fmt::Display;
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn as_return() {
-    let wasm = wat2wasm(
-        r"
+    let wasm = r"
         (module
             (func (param i32)
                 (br 0)
             )
-        )",
-    );
-    TranslationTest::new(wasm)
+        )";
+    TranslationTest::from_wat(wasm)
         .expect_func_instrs([Instruction::Return])
         .run()
 }
@@ -31,16 +22,14 @@ fn as_return() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn as_return_1() {
-    let wasm = wat2wasm(
-        r"
+    let wasm = r"
         (module
             (func (param i32) (result i32)
                 (local.get 0)
                 (br 0)
             )
-        )",
-    );
-    TranslationTest::new(wasm)
+        )";
+    TranslationTest::from_wat(wasm)
         .expect_func_instrs([Instruction::return_reg(Register::from_i16(0))])
         .run()
 }
@@ -50,12 +39,12 @@ fn as_return_1() {
 fn as_return_1_imm() {
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
-        let display_ty = DisplayValueType::from(<T as WasmType>::VALUE_TYPE);
+        let display_ty = DisplayValueType::from(<T as WasmTy>::VALUE_TYPE);
         let display_value = DisplayWasm::from(value);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (result {display_ty})
@@ -63,8 +52,8 @@ fn as_return_1_imm() {
                     (br 0)
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func(
                 ExpectedFunc::new([Instruction::return_reg(Register::from_i16(-1))])
                     .consts([value]),
@@ -87,12 +76,12 @@ fn as_return_1_imm() {
 fn as_return_1_imm32() {
     fn test_for<T>(value: T)
     where
-        T: WasmType + Into<AnyConst32>,
+        T: WasmTy + Into<AnyConst32>,
         DisplayWasm<T>: Display,
     {
-        let display_ty = DisplayValueType::from(<T as WasmType>::VALUE_TYPE);
+        let display_ty = DisplayValueType::from(<T as WasmTy>::VALUE_TYPE);
         let display_value = DisplayWasm::from(value);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (result {display_ty})
@@ -100,8 +89,8 @@ fn as_return_1_imm32() {
                     (br 0)
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([Instruction::return_imm32(value)])
             .run()
     }
@@ -116,7 +105,7 @@ fn as_return_1_imm32() {
 fn as_return_1_i64imm32() {
     fn test_for(value: i64) {
         let display_value = DisplayWasm::from(value);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (result i64)
@@ -124,8 +113,8 @@ fn as_return_1_i64imm32() {
                     (br 0)
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([return_i64imm32_instr(value)])
             .run()
     }
@@ -143,7 +132,7 @@ fn as_return_1_i64imm32() {
 fn as_return_1_f64imm32() {
     fn test_for(value: f64) {
         let display_value = DisplayWasm::from(value);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (result f64)
@@ -151,8 +140,8 @@ fn as_return_1_f64imm32() {
                     (br 0)
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([return_f64imm32_instr(value)])
             .run()
     }
@@ -173,8 +162,7 @@ fn as_return_1_f64imm32() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn test_br_as_return_values() {
-    let wasm = wat2wasm(
-        r#"
+    let wasm = r#"
         (module
             (func (result i32 i64)
                 (i32.const 2)
@@ -183,16 +171,15 @@ fn test_br_as_return_values() {
                 )
             )
         )
-        "#,
-    );
-    TranslationTest::new(wasm)
+        "#;
+    TranslationTest::from_wat(wasm)
         .expect_func(
             ExpectedFunc::new([
                 Instruction::copy_i64imm32(Register::from_i16(0), 7),
                 Instruction::branch(BranchOffset::from(1)),
                 Instruction::return_reg2(-1, 0),
             ])
-            .consts([UntypedValue::from(2_i32)]),
+            .consts([UntypedVal::from(2_i32)]),
         )
         .run()
 }

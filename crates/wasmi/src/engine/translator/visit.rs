@@ -14,9 +14,10 @@ use super::{
     FuelInfo,
     FuncTranslator,
     LabelRef,
-    TypedValue,
+    TypedVal,
 };
 use crate::{
+    core::{TrapCode, ValType, F32, F64},
     engine::{
         bytecode::{self, Const16, Instruction, Provider, Register, SignatureIdx},
         translator::AcquiredTarget,
@@ -29,9 +30,8 @@ use crate::{
     FuncRef,
     Mutability,
 };
-use alloc::collections::BTreeMap;
 use core::num::{NonZeroU32, NonZeroU64};
-use wasmi_core::{TrapCode, ValueType, F32, F64};
+use std::collections::BTreeMap;
 use wasmparser::VisitOperator;
 
 /// Used to swap operands of a `rev` variant [`Instruction`] constructor.
@@ -121,6 +121,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 ));
             return Ok(());
         }
+        self.preserve_locals()?;
         // Inherit [`Instruction::ConsumeFuel`] from parent control frame.
         //
         // # Note
@@ -130,8 +131,8 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         let fuel_instr = self.fuel_instr();
         let stack_height = BlockHeight::new(self.engine(), self.alloc.stack.height(), block_type)?;
         let end_label = self.alloc.instr_encoder.new_label();
-        let len_block_params = block_type.len_params(self.engine()) as usize;
-        let len_branch_params = block_type.len_results(self.engine()) as usize;
+        let len_block_params = block_type.len_params(self.engine());
+        let len_branch_params = block_type.len_results(self.engine());
         let branch_params = self.alloc_branch_params(len_block_params, len_branch_params)?;
         self.alloc.control_stack.push_frame(BlockControlFrame::new(
             block_type,
@@ -156,18 +157,20 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             return Ok(());
         }
         // Copy `loop` parameters over to where it expects its branch parameters.
-        let len_block_params = block_type.len_params(self.engine()) as usize;
+        let len_block_params = block_type.len_params(self.engine());
         self.alloc
             .stack
-            .pop_n(len_block_params, &mut self.alloc.buffer);
+            .pop_n(len_block_params, &mut self.alloc.buffer.providers);
         let branch_params = self.alloc.stack.push_dynamic_n(len_block_params)?;
+        // self.preserve_locals()?; // TODO: find a case where local preservation before loops is necessary
         let fuel_info = self.fuel_info();
         self.alloc.instr_encoder.encode_copies(
             &mut self.alloc.stack,
             branch_params.iter(len_block_params),
-            &self.alloc.buffer[..],
+            &self.alloc.buffer.providers[..],
             fuel_info,
         )?;
+        self.alloc.instr_encoder.reset_last_instr();
         // Create loop header label and immediately pin it.
         let stack_height = BlockHeight::new(self.engine(), self.alloc.stack.height(), block_type)?;
         let header = self.alloc.instr_encoder.new_label();
@@ -206,9 +209,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         }
         let condition = self.alloc.stack.pop();
         let stack_height = BlockHeight::new(self.engine(), self.alloc.stack.height(), block_type)?;
+        self.preserve_locals()?;
         let end_label = self.alloc.instr_encoder.new_label();
-        let len_block_params = block_type.len_params(self.engine()) as usize;
-        let len_branch_params = block_type.len_results(self.engine()) as usize;
+        let len_block_params = block_type.len_params(self.engine());
+        let len_branch_params = block_type.len_results(self.engine());
         let branch_params = self.alloc_branch_params(len_block_params, len_branch_params)?;
         let (reachability, fuel_instr) = match condition {
             TypedProvider::Const(condition) => {
@@ -238,10 +242,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 // later use in case we eventually visit the `else` branch.
                 self.alloc
                     .stack
-                    .peek_n(len_block_params, &mut self.alloc.buffer);
+                    .peek_n(len_block_params, &mut self.alloc.buffer.providers);
                 self.alloc
                     .control_stack
-                    .push_else_providers(self.alloc.buffer.iter().copied())?;
+                    .push_else_providers(self.alloc.buffer.providers.iter().copied())?;
                 // Note: We increase preservation register usage of else providers
                 //       so that they cannot be invalidated in the `then` block before
                 //       arriving at the `else` block of an `if`.
@@ -249,6 +253,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 //       end of the `else`, or `if` in case `else` is missing.
                 self.alloc
                     .buffer
+                    .providers
                     .iter()
                     .copied()
                     .filter_map(TypedProvider::into_register)
@@ -429,10 +434,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                         }
                         self.alloc
                             .stack
-                            .peek_n(branch_params.len(), &mut self.alloc.buffer);
+                            .peek_n(branch_params.len(), &mut self.alloc.buffer.providers);
                         if self
                             .alloc
                             .buffer
+                            .providers
                             .iter()
                             .copied()
                             .eq(branch_params.map(TypedProvider::Register))
@@ -467,7 +473,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                         self.alloc.instr_encoder.encode_copies(
                             &mut self.alloc.stack,
                             branch_params,
-                            &self.alloc.buffer[..],
+                            &self.alloc.buffer.providers[..],
                             fuel_info,
                         )?;
                         let branch_offset =
@@ -513,11 +519,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         };
         // Add `br_table` targets to `br_table_targets` buffer including default target.
         // This allows us to uniformely treat all `br_table` targets the same and only parse once.
-        self.alloc.br_table_targets.clear();
+        self.alloc.buffer.br_table_targets.clear();
         for target in targets.targets() {
-            self.alloc.br_table_targets.push(target?);
+            self.alloc.buffer.br_table_targets.push(target?);
         }
-        self.alloc.br_table_targets.push(default_target);
+        self.alloc.buffer.br_table_targets.push(default_target);
         // We check if all `br_table` targets expect their results at the same
         // registers which allows us to encode the `br_table` more efficiently
         // by using a single copy instruction before branching instead of having
@@ -528,18 +534,24 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             .acquire_target(default_target)
             .control_frame()
             .branch_params(&engine);
-        let same_branch_params = self.alloc.br_table_targets.iter().copied().all(|target| {
-            match self.alloc.control_stack.acquire_target(target) {
-                AcquiredTarget::Return(_) => {
-                    // Return instructions never need to copy anything and
-                    // thus we can simply ignore them for this conditional.
-                    true
+        let same_branch_params = self
+            .alloc
+            .buffer
+            .br_table_targets
+            .iter()
+            .copied()
+            .all(|target| {
+                match self.alloc.control_stack.acquire_target(target) {
+                    AcquiredTarget::Return(_) => {
+                        // Return instructions never need to copy anything and
+                        // thus we can simply ignore them for this conditional.
+                        true
+                    }
+                    AcquiredTarget::Branch(frame) => {
+                        default_branch_params == frame.branch_params(&engine)
+                    }
                 }
-                AcquiredTarget::Branch(frame) => {
-                    default_branch_params == frame.branch_params(&engine)
-                }
-            }
-        });
+            });
         if default_branch_params.is_empty() || same_branch_params {
             // Case 1: No `br_target` target requires values to be copied around.
             // Case 2: All `br_target` targets use the same branch parameter registers.
@@ -554,7 +566,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 1 => Instruction::return_reg(default_branch_params.span().head()),
                 _ => Instruction::return_span(default_branch_params),
             };
-            for target in self.alloc.br_table_targets.iter().copied() {
+            for target in self.alloc.buffer.br_table_targets.iter().copied() {
                 match self.alloc.control_stack.acquire_target(target) {
                     AcquiredTarget::Return(_) => {
                         self.alloc.instr_encoder.append_instr(return_instr)?;
@@ -582,7 +594,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         // share codegen for `br_table` arms that have the same branch target.
         self.push_base_instr(Instruction::branch_table(index, targets.len() + 1))?;
         let mut shared_targets = <BTreeMap<u32, LabelRef>>::new();
-        for target in self.alloc.br_table_targets.iter().copied() {
+        for target in self.alloc.buffer.br_table_targets.iter().copied() {
             let shared_label = *shared_targets
                 .entry(target)
                 .or_insert_with(|| self.alloc.instr_encoder.new_label());
@@ -591,7 +603,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 .instr_encoder
                 .append_instr(Instruction::branch(branch_offset))?;
         }
-        let values = &mut self.alloc.buffer;
+        let values = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(default_branch_params.len(), values);
         for (depth, label) in shared_targets {
             self.alloc.instr_encoder.pin_label(label);
@@ -639,16 +651,16 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         let func_idx = FuncIdx::from(function_index);
         let func_type = self.func_type_of(func_idx);
         let (params, results) = func_type.params_results();
-        let provider_params = &mut self.alloc.buffer;
+        let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
         let results = self.alloc.stack.push_dynamic_n(results.len())?;
-        let instr = match self.module.get_compiled_func(func_idx) {
-            Some(compiled_func) => {
+        let instr = match self.module.get_engine_func(func_idx) {
+            Some(engine_func) => {
                 // Case: We are calling an internal function and can optimize
                 //       this case by using the special instruction for it.
                 match params.len() {
-                    0 => Instruction::call_internal_0(results, compiled_func),
-                    _ => Instruction::call_internal(results, compiled_func),
+                    0 => Instruction::call_internal_0(results, engine_func),
+                    _ => Instruction::call_internal(results, engine_func),
                 }
             }
             None => {
@@ -679,7 +691,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         let func_type = self.func_type_at(type_index);
         let (params, results) = func_type.params_results();
         let index = self.alloc.stack.pop();
-        let provider_params = &mut self.alloc.buffer;
+        let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
         let table_params = match index {
             TypedProvider::Const(index) => match <Const16<u32>>::try_from(u32::from(index)).ok() {
@@ -716,15 +728,15 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         let func_idx = FuncIdx::from(function_index);
         let func_type = self.func_type_of(func_idx);
         let params = func_type.params();
-        let provider_params = &mut self.alloc.buffer;
+        let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
-        let instr = match self.module.get_compiled_func(func_idx) {
-            Some(compiled_func) => {
+        let instr = match self.module.get_engine_func(func_idx) {
+            Some(engine_func) => {
                 // Case: We are calling an internal function and can optimize
                 //       this case by using the special instruction for it.
                 match params.len() {
-                    0 => Instruction::return_call_internal_0(compiled_func),
-                    _ => Instruction::return_call_internal(compiled_func),
+                    0 => Instruction::return_call_internal_0(engine_func),
+                    _ => Instruction::return_call_internal(engine_func),
                 }
             }
             None => {
@@ -751,7 +763,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         let func_type = self.func_type_at(type_index);
         let params = func_type.params();
         let index = self.alloc.stack.pop();
-        let provider_params = &mut self.alloc.buffer;
+        let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
         let table_params = match index {
             TypedProvider::Const(index) => match <Const16<u32>>::try_from(u32::from(index)).ok() {
@@ -800,12 +812,12 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_local_get(&mut self, local_index: u32) -> Self::Output {
         bail_unreachable!(self);
         self.alloc.stack.push_local(local_index)?;
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
     fn visit_local_set(&mut self, local_index: u32) -> Self::Output {
         bail_unreachable!(self);
+        self.alloc.stack.gc_preservations();
         let value = self.alloc.stack.pop();
         let local = Register::try_from(local_index)?;
         if let TypedProvider::Register(value) = value {
@@ -854,8 +866,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             if let Some(value) = init_expr.eval_const() {
                 // Optimization: Access to immutable internally defined global variables
                 //               can be replaced with their constant initialization value.
-                self.alloc.stack.push_const(TypedValue::new(content, value));
-                self.alloc.instr_encoder.reset_last_instr();
+                self.alloc.stack.push_const(TypedVal::new(content, value));
                 return Ok(());
             }
             if let Some(func_index) = init_expr.funcref() {
@@ -889,7 +900,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     .get_global(module::GlobalIdx::from(global_index));
                 debug_assert_eq!(global_type.content(), input.ty());
                 match global_type.content() {
-                    ValueType::I32 => {
+                    ValType::I32 => {
                         if let Ok(value) = Const16::try_from(i32::from(input)) {
                             self.push_fueled_instr(
                                 Instruction::global_set_i32imm16(global, value),
@@ -898,7 +909,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                             return Ok(());
                         }
                     }
-                    ValueType::I64 => {
+                    ValType::I64 => {
                         if let Ok(value) = Const16::try_from(i64::from(input)) {
                             self.push_fueled_instr(
                                 Instruction::global_set_i64imm16(global, value),
@@ -1172,28 +1183,24 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_const(&mut self, value: i32) -> Self::Output {
         bail_unreachable!(self);
         self.alloc.stack.push_const(value);
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
     fn visit_i64_const(&mut self, value: i64) -> Self::Output {
         bail_unreachable!(self);
         self.alloc.stack.push_const(value);
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
     fn visit_f32_const(&mut self, value: wasmparser::Ieee32) -> Self::Output {
         bail_unreachable!(self);
         self.alloc.stack.push_const(F32::from_bits(value.bits()));
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
     fn visit_f64_const(&mut self, value: wasmparser::Ieee64) -> Self::Output {
         bail_unreachable!(self);
         self.alloc.stack.push_const(F64::from_bits(value.bits()));
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
@@ -1201,12 +1208,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         bail_unreachable!(self);
         let type_hint = WasmiValueType::from(ty).into_inner();
         let null = match type_hint {
-            ValueType::FuncRef => TypedValue::from(FuncRef::null()),
-            ValueType::ExternRef => TypedValue::from(ExternRef::null()),
+            ValType::FuncRef => TypedVal::from(FuncRef::null()),
+            ValType::ExternRef => TypedVal::from(ExternRef::null()),
             _ => panic!("must be a Wasm reftype"),
         };
         self.alloc.stack.push_const(null);
-        self.alloc.instr_encoder.reset_last_instr();
         Ok(())
     }
 
@@ -1241,7 +1247,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative::<i32>(
             Instruction::i32_eq,
             Instruction::i32_eq_imm16,
-            TypedValue::i32_eq,
+            TypedVal::i32_eq,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x == x` is always `true`
@@ -1258,7 +1264,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative::<i32>(
             Instruction::i32_ne,
             Instruction::i32_ne_imm16,
-            TypedValue::i32_ne,
+            TypedVal::i32_ne,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x != x` is always `false`
@@ -1276,7 +1282,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_lt_s,
             Instruction::i32_lt_s_imm16,
             swap_ops!(Instruction::i32_gt_s_imm16),
-            TypedValue::i32_lt_s,
+            TypedVal::i32_lt_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -1309,7 +1315,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_lt_u,
             Instruction::i32_lt_u_imm16,
             swap_ops!(Instruction::i32_gt_u_imm16),
-            TypedValue::i32_lt_u,
+            TypedVal::i32_lt_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -1342,7 +1348,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_gt_s,
             Instruction::i32_gt_s_imm16,
             swap_ops!(Instruction::i32_lt_s_imm16),
-            TypedValue::i32_gt_s,
+            TypedVal::i32_gt_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -1375,7 +1381,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_gt_u,
             Instruction::i32_gt_u_imm16,
             swap_ops!(Instruction::i32_lt_u_imm16),
-            TypedValue::i32_gt_u,
+            TypedVal::i32_gt_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -1408,7 +1414,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_le_s,
             Instruction::i32_le_s_imm16,
             swap_ops!(Instruction::i32_ge_s_imm16),
-            TypedValue::i32_le_s,
+            TypedVal::i32_le_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
@@ -1441,7 +1447,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_le_u,
             Instruction::i32_le_u_imm16,
             swap_ops!(Instruction::i32_ge_u_imm16),
-            TypedValue::i32_le_u,
+            TypedVal::i32_le_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
@@ -1474,7 +1480,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_ge_s,
             Instruction::i32_ge_s_imm16,
             swap_ops!(Instruction::i32_le_s_imm16),
-            TypedValue::i32_ge_s,
+            TypedVal::i32_ge_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
@@ -1507,7 +1513,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_ge_u,
             Instruction::i32_ge_u_imm16,
             swap_ops!(Instruction::i32_le_u_imm16),
-            TypedValue::i32_ge_u,
+            TypedVal::i32_ge_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
@@ -1546,7 +1552,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative::<i64>(
             Instruction::i64_eq,
             Instruction::i64_eq_imm16,
-            TypedValue::i64_eq,
+            TypedVal::i64_eq,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x == x` is always `true`
@@ -1563,7 +1569,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative::<i64>(
             Instruction::i64_ne,
             Instruction::i64_ne_imm16,
-            TypedValue::i64_ne,
+            TypedVal::i64_ne,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x != x` is always `false`
@@ -1581,7 +1587,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_lt_s,
             Instruction::i64_lt_s_imm16,
             swap_ops!(Instruction::i64_gt_s_imm16),
-            TypedValue::i64_lt_s,
+            TypedVal::i64_lt_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -1614,7 +1620,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_lt_u,
             Instruction::i64_lt_u_imm16,
             swap_ops!(Instruction::i64_gt_u_imm16),
-            TypedValue::i64_lt_u,
+            TypedVal::i64_lt_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -1647,7 +1653,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_gt_s,
             Instruction::i64_gt_s_imm16,
             swap_ops!(Instruction::i64_lt_s_imm16),
-            TypedValue::i64_gt_s,
+            TypedVal::i64_gt_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -1680,7 +1686,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_gt_u,
             Instruction::i64_gt_u_imm16,
             swap_ops!(Instruction::i64_lt_u_imm16),
-            TypedValue::i64_gt_u,
+            TypedVal::i64_gt_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -1713,7 +1719,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_le_s,
             Instruction::i64_le_s_imm16,
             swap_ops!(Instruction::i64_ge_s_imm16),
-            TypedValue::i64_le_s,
+            TypedVal::i64_le_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
@@ -1746,7 +1752,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_le_u,
             Instruction::i64_le_u_imm16,
             swap_ops!(Instruction::i64_ge_u_imm16),
-            TypedValue::i64_le_u,
+            TypedVal::i64_le_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
@@ -1779,7 +1785,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_ge_s,
             Instruction::i64_ge_s_imm16,
             swap_ops!(Instruction::i64_le_s_imm16),
-            TypedValue::i64_ge_s,
+            TypedVal::i64_ge_s,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
@@ -1812,7 +1818,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_ge_u,
             Instruction::i64_ge_u_imm16,
             swap_ops!(Instruction::i64_le_u_imm16),
-            TypedValue::i64_ge_u,
+            TypedVal::i64_ge_u,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
@@ -1843,7 +1849,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_eq(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f32>(
             Instruction::f32_eq,
-            TypedValue::f32_eq,
+            TypedVal::f32_eq,
             Self::no_custom_opt,
             |this, _reg_in: Register, imm_in: f32| {
                 if imm_in.is_nan() {
@@ -1859,7 +1865,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_ne(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f32>(
             Instruction::f32_ne,
-            TypedValue::f32_ne,
+            TypedVal::f32_ne,
             Self::no_custom_opt,
             |this, _reg_in: Register, imm_in: f32| {
                 if imm_in.is_nan() {
@@ -1875,7 +1881,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_lt(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f32_lt,
-            TypedValue::f32_lt,
+            TypedVal::f32_lt,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -1916,7 +1922,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_gt(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f32_gt,
-            TypedValue::f32_gt,
+            TypedVal::f32_gt,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -1957,7 +1963,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_le(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f32_le,
-            TypedValue::f32_le,
+            TypedVal::f32_le,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: f32| {
                 if rhs.is_nan() {
@@ -1981,7 +1987,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_ge(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f32_ge,
-            TypedValue::f32_ge,
+            TypedVal::f32_ge,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: f32| {
                 if rhs.is_nan() {
@@ -2005,7 +2011,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_eq(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f64>(
             Instruction::f64_eq,
-            TypedValue::f64_eq,
+            TypedVal::f64_eq,
             Self::no_custom_opt,
             |this, _reg_in: Register, imm_in: f64| {
                 if imm_in.is_nan() {
@@ -2021,7 +2027,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_ne(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f64>(
             Instruction::f64_ne,
-            TypedValue::f64_ne,
+            TypedVal::f64_ne,
             Self::no_custom_opt,
             |this, _reg_in: Register, imm_in: f64| {
                 if imm_in.is_nan() {
@@ -2037,7 +2043,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_lt(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f64_lt,
-            TypedValue::f64_lt,
+            TypedVal::f64_lt,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
@@ -2078,7 +2084,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_gt(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f64_gt,
-            TypedValue::f64_gt,
+            TypedVal::f64_gt,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
@@ -2119,7 +2125,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_le(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f64_le,
-            TypedValue::f64_le,
+            TypedVal::f64_le,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: f64| {
                 if rhs.is_nan() {
@@ -2143,7 +2149,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_ge(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f64_ge,
-            TypedValue::f64_ge,
+            TypedVal::f64_ge,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: f64| {
                 if rhs.is_nan() {
@@ -2165,22 +2171,22 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i32_clz(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_clz, TypedValue::i32_clz)
+        self.translate_unary(Instruction::i32_clz, TypedVal::i32_clz)
     }
 
     fn visit_i32_ctz(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_ctz, TypedValue::i32_ctz)
+        self.translate_unary(Instruction::i32_ctz, TypedVal::i32_ctz)
     }
 
     fn visit_i32_popcnt(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_popcnt, TypedValue::i32_popcnt)
+        self.translate_unary(Instruction::i32_popcnt, TypedVal::i32_popcnt)
     }
 
     fn visit_i32_add(&mut self) -> Self::Output {
         self.translate_binary_commutative(
             Instruction::i32_add,
             Instruction::i32_add_imm16,
-            TypedValue::i32_add,
+            TypedVal::i32_add,
             Self::no_custom_opt,
             |this, reg: Register, value: i32| {
                 if value == 0 {
@@ -2196,9 +2202,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_sub(&mut self) -> Self::Output {
         self.translate_binary(
             Instruction::i32_sub,
-            Instruction::i32_sub_imm16,
+            |_, _, _| unreachable!("`i32.sub r c` is translated as `i32.add r -c`"),
             Instruction::i32_sub_imm16_rev,
-            TypedValue::i32_sub,
+            TypedVal::i32_sub,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `sub x - x` is always `0`
@@ -2213,7 +2219,16 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     this.alloc.stack.push_register(lhs)?;
                     return Ok(true);
                 }
-                Ok(false)
+                if this.try_push_binary_instr_imm16(
+                    lhs,
+                    rhs.wrapping_neg(),
+                    Instruction::i32_add_imm16,
+                )? {
+                    // Simplification: Translate `i32.sub r c` as `i32.add r -c`
+                    return Ok(true);
+                }
+                this.push_binary_instr_imm(lhs, rhs.wrapping_neg(), Instruction::i32_add)?;
+                Ok(true)
             },
             Self::no_custom_opt,
         )
@@ -2223,7 +2238,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i32_mul,
             Instruction::i32_mul_imm16,
-            TypedValue::i32_mul,
+            TypedVal::i32_mul,
             Self::no_custom_opt,
             |this, reg: Register, value: i32| {
                 if value == 0 {
@@ -2246,7 +2261,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_div_s,
             Instruction::i32_div_s_imm16,
             Instruction::i32_div_s_imm16_rev,
-            TypedValue::i32_div_s,
+            TypedVal::i32_div_s,
             Self::no_custom_opt,
             |this, lhs: Register, rhs: i32| {
                 if rhs == 1 {
@@ -2264,7 +2279,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_div_u,
             Instruction::i32_div_u_imm16,
             Instruction::i32_div_u_imm16_rev,
-            TypedValue::i32_div_u,
+            TypedVal::i32_div_u,
             Self::no_custom_opt,
             |this, lhs: Register, rhs: u32| {
                 if rhs == 1 {
@@ -2282,7 +2297,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_rem_s,
             Instruction::i32_rem_s_imm16,
             Instruction::i32_rem_s_imm16_rev,
-            TypedValue::i32_rem_s,
+            TypedVal::i32_rem_s,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: i32| {
                 if rhs == 1 || rhs == -1 {
@@ -2300,7 +2315,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_rem_u,
             Instruction::i32_rem_u_imm16,
             Instruction::i32_rem_u_imm16_rev,
-            TypedValue::i32_rem_u,
+            TypedVal::i32_rem_u,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: u32| {
                 if rhs == 1 {
@@ -2317,7 +2332,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i32_and,
             Instruction::i32_and_imm16,
-            TypedValue::i32_and,
+            TypedVal::i32_and,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x & x` is always just `x`
@@ -2349,7 +2364,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i32_or,
             Instruction::i32_or_imm16,
-            TypedValue::i32_or,
+            TypedVal::i32_or,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x | x` is always just `x`
@@ -2381,7 +2396,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i32_xor,
             Instruction::i32_xor_imm16,
-            TypedValue::i32_xor,
+            TypedVal::i32_xor,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x ^ x` is always `0`
@@ -2406,7 +2421,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_shl,
             Instruction::i32_shl_imm,
             Instruction::i32_shl_imm16_rev,
-            TypedValue::i32_shl,
+            TypedVal::i32_shl,
             Self::no_custom_opt,
         )
     }
@@ -2416,7 +2431,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_shr_s,
             Instruction::i32_shr_s_imm,
             Instruction::i32_shr_s_imm16_rev,
-            TypedValue::i32_shr_s,
+            TypedVal::i32_shr_s,
             |this, lhs: i32, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
@@ -2433,7 +2448,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_shr_u,
             Instruction::i32_shr_u_imm,
             Instruction::i32_shr_u_imm16_rev,
-            TypedValue::i32_shr_u,
+            TypedVal::i32_shr_u,
             Self::no_custom_opt,
         )
     }
@@ -2443,7 +2458,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_rotl,
             Instruction::i32_rotl_imm,
             Instruction::i32_rotl_imm16_rev,
-            TypedValue::i32_rotl,
+            TypedVal::i32_rotl,
             |this, lhs: i32, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1.rotate_left(x)` is always `-1` for every valid `x`
@@ -2460,7 +2475,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_rotr,
             Instruction::i32_rotr_imm,
             Instruction::i32_rotr_imm16_rev,
-            TypedValue::i32_rotr,
+            TypedVal::i32_rotr,
             |this, lhs: i32, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1.rotate_right(x)` is always `-1` for every valid `x`
@@ -2473,22 +2488,22 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i64_clz(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_clz, TypedValue::i64_clz)
+        self.translate_unary(Instruction::i64_clz, TypedVal::i64_clz)
     }
 
     fn visit_i64_ctz(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_ctz, TypedValue::i64_ctz)
+        self.translate_unary(Instruction::i64_ctz, TypedVal::i64_ctz)
     }
 
     fn visit_i64_popcnt(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_popcnt, TypedValue::i64_popcnt)
+        self.translate_unary(Instruction::i64_popcnt, TypedVal::i64_popcnt)
     }
 
     fn visit_i64_add(&mut self) -> Self::Output {
         self.translate_binary_commutative(
             Instruction::i64_add,
             Instruction::i64_add_imm16,
-            TypedValue::i64_add,
+            TypedVal::i64_add,
             Self::no_custom_opt,
             |this, reg: Register, value: i64| {
                 if value == 0 {
@@ -2504,9 +2519,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_sub(&mut self) -> Self::Output {
         self.translate_binary(
             Instruction::i64_sub,
-            Instruction::i64_sub_imm16,
+            |_, _, _| unreachable!("`i64.sub r c` is translated as `i64.add r -c`"),
             Instruction::i64_sub_imm16_rev,
-            TypedValue::i64_sub,
+            TypedVal::i64_sub,
             |this, lhs: Register, rhs: Register| {
                 if lhs == rhs {
                     // Optimization: `sub x - x` is always `0`
@@ -2521,7 +2536,16 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     this.alloc.stack.push_register(lhs)?;
                     return Ok(true);
                 }
-                Ok(false)
+                if this.try_push_binary_instr_imm16(
+                    lhs,
+                    rhs.wrapping_neg(),
+                    Instruction::i64_add_imm16,
+                )? {
+                    // Simplification: Translate `i64.sub r c` as `i64.add r -c`
+                    return Ok(true);
+                }
+                this.push_binary_instr_imm(lhs, rhs.wrapping_neg(), Instruction::i64_add)?;
+                Ok(true)
             },
             Self::no_custom_opt,
         )
@@ -2531,7 +2555,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i64_mul,
             Instruction::i64_mul_imm16,
-            TypedValue::i64_mul,
+            TypedVal::i64_mul,
             Self::no_custom_opt,
             |this, reg: Register, value: i64| {
                 if value == 0 {
@@ -2554,7 +2578,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_div_s,
             Instruction::i64_div_s_imm16,
             Instruction::i64_div_s_imm16_rev,
-            TypedValue::i64_div_s,
+            TypedVal::i64_div_s,
             Self::no_custom_opt,
             |this, lhs: Register, rhs: i64| {
                 if rhs == 1 {
@@ -2572,7 +2596,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_div_u,
             Instruction::i64_div_u_imm16,
             Instruction::i64_div_u_imm16_rev,
-            TypedValue::i64_div_u,
+            TypedVal::i64_div_u,
             Self::no_custom_opt,
             |this, lhs: Register, rhs: u64| {
                 if rhs == 1 {
@@ -2590,7 +2614,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_rem_s,
             Instruction::i64_rem_s_imm16,
             Instruction::i64_rem_s_imm16_rev,
-            TypedValue::i64_rem_s,
+            TypedVal::i64_rem_s,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: i64| {
                 if rhs == 1 || rhs == -1 {
@@ -2608,7 +2632,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_rem_u,
             Instruction::i64_rem_u_imm16,
             Instruction::i64_rem_u_imm16_rev,
-            TypedValue::i64_rem_u,
+            TypedVal::i64_rem_u,
             Self::no_custom_opt,
             |this, _lhs: Register, rhs: u64| {
                 if rhs == 1 {
@@ -2625,7 +2649,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i64_and,
             Instruction::i64_and_imm16,
-            TypedValue::i64_and,
+            TypedVal::i64_and,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x & x` is always just `x`
@@ -2657,7 +2681,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i64_or,
             Instruction::i64_or_imm16,
-            TypedValue::i64_or,
+            TypedVal::i64_or,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x | x` is always just `x`
@@ -2689,7 +2713,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary_commutative(
             Instruction::i64_xor,
             Instruction::i64_xor_imm16,
-            TypedValue::i64_xor,
+            TypedVal::i64_xor,
             |this, lhs, rhs| {
                 if lhs == rhs {
                     // Optimization: `x ^ x` is always `0`
@@ -2714,7 +2738,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_shl,
             Instruction::i64_shl_imm,
             Instruction::i64_shl_imm16_rev,
-            TypedValue::i64_shl,
+            TypedVal::i64_shl,
             Self::no_custom_opt,
         )
     }
@@ -2724,7 +2748,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_shr_s,
             Instruction::i64_shr_s_imm,
             Instruction::i64_shr_s_imm16_rev,
-            TypedValue::i64_shr_s,
+            TypedVal::i64_shr_s,
             |this, lhs: i64, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
@@ -2741,7 +2765,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_shr_u,
             Instruction::i64_shr_u_imm,
             Instruction::i64_shr_u_imm16_rev,
-            TypedValue::i64_shr_u,
+            TypedVal::i64_shr_u,
             Self::no_custom_opt,
         )
     }
@@ -2751,7 +2775,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_rotl,
             Instruction::i64_rotl_imm,
             Instruction::i64_rotl_imm16_rev,
-            TypedValue::i64_rotl,
+            TypedVal::i64_rotl,
             |this, lhs: i64, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
@@ -2768,7 +2792,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_rotr,
             Instruction::i64_rotr_imm,
             Instruction::i64_rotr_imm16_rev,
-            TypedValue::i64_rotr,
+            TypedVal::i64_rotr,
             |this, lhs: i64, _rhs: Register| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
@@ -2781,37 +2805,37 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_f32_abs(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_abs, TypedValue::f32_abs)
+        self.translate_unary(Instruction::f32_abs, TypedVal::f32_abs)
     }
 
     fn visit_f32_neg(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_neg, TypedValue::f32_neg)
+        self.translate_unary(Instruction::f32_neg, TypedVal::f32_neg)
     }
 
     fn visit_f32_ceil(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_ceil, TypedValue::f32_ceil)
+        self.translate_unary(Instruction::f32_ceil, TypedVal::f32_ceil)
     }
 
     fn visit_f32_floor(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_floor, TypedValue::f32_floor)
+        self.translate_unary(Instruction::f32_floor, TypedVal::f32_floor)
     }
 
     fn visit_f32_trunc(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_trunc, TypedValue::f32_trunc)
+        self.translate_unary(Instruction::f32_trunc, TypedVal::f32_trunc)
     }
 
     fn visit_f32_nearest(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_nearest, TypedValue::f32_nearest)
+        self.translate_unary(Instruction::f32_nearest, TypedVal::f32_nearest)
     }
 
     fn visit_f32_sqrt(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_sqrt, TypedValue::f32_sqrt)
+        self.translate_unary(Instruction::f32_sqrt, TypedVal::f32_sqrt)
     }
 
     fn visit_f32_add(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f32_add,
-            TypedValue::f32_add,
+            TypedVal::f32_add,
             Self::no_custom_opt,
             Self::no_custom_opt::<Register, f32>,
         )
@@ -2820,7 +2844,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_sub(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f32_sub,
-            TypedValue::f32_sub,
+            TypedVal::f32_sub,
             Self::no_custom_opt,
             Self::no_custom_opt::<Register, f32>,
             // Unfortunately we cannot optimize for the case that `lhs == 0.0`
@@ -2833,7 +2857,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_mul(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f32>(
             Instruction::f32_mul,
-            TypedValue::f32_mul,
+            TypedVal::f32_mul,
             Self::no_custom_opt,
             // Unfortunately we cannot apply `x * 0` or `0 * x` optimizations
             // since Wasm mandates different behaviors if `x` is infinite or
@@ -2845,7 +2869,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_div(&mut self) -> Self::Output {
         self.translate_fbinary::<f32>(
             Instruction::f32_div,
-            TypedValue::f32_div,
+            TypedVal::f32_div,
             Self::no_custom_opt,
             Self::no_custom_opt,
             Self::no_custom_opt,
@@ -2855,7 +2879,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_min(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f32_min,
-            TypedValue::f32_min,
+            TypedVal::f32_min,
             Self::no_custom_opt,
             |this, reg: Register, value: f32| {
                 if value.is_infinite() && value.is_sign_positive() {
@@ -2871,7 +2895,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f32_max(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f32_max,
-            TypedValue::f32_max,
+            TypedVal::f32_max,
             Self::no_custom_opt,
             |this, reg: Register, value: f32| {
                 if value.is_infinite() && value.is_sign_negative() {
@@ -2888,42 +2912,42 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fcopysign::<f32>(
             Instruction::f32_copysign,
             Instruction::f32_copysign_imm,
-            TypedValue::f32_copysign,
+            TypedVal::f32_copysign,
         )
     }
 
     fn visit_f64_abs(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_abs, TypedValue::f64_abs)
+        self.translate_unary(Instruction::f64_abs, TypedVal::f64_abs)
     }
 
     fn visit_f64_neg(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_neg, TypedValue::f64_neg)
+        self.translate_unary(Instruction::f64_neg, TypedVal::f64_neg)
     }
 
     fn visit_f64_ceil(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_ceil, TypedValue::f64_ceil)
+        self.translate_unary(Instruction::f64_ceil, TypedVal::f64_ceil)
     }
 
     fn visit_f64_floor(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_floor, TypedValue::f64_floor)
+        self.translate_unary(Instruction::f64_floor, TypedVal::f64_floor)
     }
 
     fn visit_f64_trunc(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_trunc, TypedValue::f64_trunc)
+        self.translate_unary(Instruction::f64_trunc, TypedVal::f64_trunc)
     }
 
     fn visit_f64_nearest(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_nearest, TypedValue::f64_nearest)
+        self.translate_unary(Instruction::f64_nearest, TypedVal::f64_nearest)
     }
 
     fn visit_f64_sqrt(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_sqrt, TypedValue::f64_sqrt)
+        self.translate_unary(Instruction::f64_sqrt, TypedVal::f64_sqrt)
     }
 
     fn visit_f64_add(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f64_add,
-            TypedValue::f64_add,
+            TypedVal::f64_add,
             Self::no_custom_opt,
             Self::no_custom_opt::<Register, f64>,
         )
@@ -2932,7 +2956,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_sub(&mut self) -> Self::Output {
         self.translate_fbinary(
             Instruction::f64_sub,
-            TypedValue::f64_sub,
+            TypedVal::f64_sub,
             Self::no_custom_opt,
             Self::no_custom_opt::<Register, f64>,
             // Unfortunately we cannot optimize for the case that `lhs == 0.0`
@@ -2945,7 +2969,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_mul(&mut self) -> Self::Output {
         self.translate_fbinary_commutative::<f64>(
             Instruction::f64_mul,
-            TypedValue::f64_mul,
+            TypedVal::f64_mul,
             Self::no_custom_opt,
             // Unfortunately we cannot apply `x * 0` or `0 * x` optimizations
             // since Wasm mandates different behaviors if `x` is infinite or
@@ -2957,7 +2981,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_div(&mut self) -> Self::Output {
         self.translate_fbinary::<f64>(
             Instruction::f64_div,
-            TypedValue::f64_div,
+            TypedVal::f64_div,
             Self::no_custom_opt,
             Self::no_custom_opt,
             Self::no_custom_opt,
@@ -2967,7 +2991,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_min(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f64_min,
-            TypedValue::f64_min,
+            TypedVal::f64_min,
             Self::no_custom_opt,
             |this, reg: Register, value: f64| {
                 if value.is_infinite() && value.is_sign_positive() {
@@ -2983,7 +3007,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_f64_max(&mut self) -> Self::Output {
         self.translate_fbinary_commutative(
             Instruction::f64_max,
-            TypedValue::f64_max,
+            TypedVal::f64_max,
             Self::no_custom_opt,
             |this, reg: Register, value: f64| {
                 if value.is_infinite() && value.is_sign_negative() {
@@ -3000,207 +3024,183 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fcopysign::<f64>(
             Instruction::f64_copysign,
             Instruction::f64_copysign_imm,
-            TypedValue::f64_copysign,
+            TypedVal::f64_copysign,
         )
     }
 
     fn visit_i32_wrap_i64(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_wrap_i64, TypedValue::i32_wrap_i64)
+        self.translate_unary(Instruction::i32_wrap_i64, TypedVal::i32_wrap_i64)
     }
 
     fn visit_i32_trunc_f32_s(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i32_trunc_f32_s, TypedValue::i32_trunc_f32_s)
+        self.translate_unary_fallible(Instruction::i32_trunc_f32_s, TypedVal::i32_trunc_f32_s)
     }
 
     fn visit_i32_trunc_f32_u(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i32_trunc_f32_u, TypedValue::i32_trunc_f32_u)
+        self.translate_unary_fallible(Instruction::i32_trunc_f32_u, TypedVal::i32_trunc_f32_u)
     }
 
     fn visit_i32_trunc_f64_s(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i32_trunc_f64_s, TypedValue::i32_trunc_f64_s)
+        self.translate_unary_fallible(Instruction::i32_trunc_f64_s, TypedVal::i32_trunc_f64_s)
     }
 
     fn visit_i32_trunc_f64_u(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i32_trunc_f64_u, TypedValue::i32_trunc_f64_u)
+        self.translate_unary_fallible(Instruction::i32_trunc_f64_u, TypedVal::i32_trunc_f64_u)
     }
 
     fn visit_i64_extend_i32_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend_i32_s, TypedValue::i64_extend_i32_s)
+        self.translate_unary(Instruction::i64_extend_i32_s, TypedVal::i64_extend_i32_s)
     }
 
     fn visit_i64_extend_i32_u(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend_i32_u, TypedValue::i64_extend_i32_u)
+        self.translate_unary(Instruction::i64_extend_i32_u, TypedVal::i64_extend_i32_u)
     }
 
     fn visit_i64_trunc_f32_s(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i64_trunc_f32_s, TypedValue::i64_trunc_f32_s)
+        self.translate_unary_fallible(Instruction::i64_trunc_f32_s, TypedVal::i64_trunc_f32_s)
     }
 
     fn visit_i64_trunc_f32_u(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i64_trunc_f32_u, TypedValue::i64_trunc_f32_u)
+        self.translate_unary_fallible(Instruction::i64_trunc_f32_u, TypedVal::i64_trunc_f32_u)
     }
 
     fn visit_i64_trunc_f64_s(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i64_trunc_f64_s, TypedValue::i64_trunc_f64_s)
+        self.translate_unary_fallible(Instruction::i64_trunc_f64_s, TypedVal::i64_trunc_f64_s)
     }
 
     fn visit_i64_trunc_f64_u(&mut self) -> Self::Output {
-        self.translate_unary_fallible(Instruction::i64_trunc_f64_u, TypedValue::i64_trunc_f64_u)
+        self.translate_unary_fallible(Instruction::i64_trunc_f64_u, TypedVal::i64_trunc_f64_u)
     }
 
     fn visit_f32_convert_i32_s(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f32_convert_i32_s,
-            TypedValue::f32_convert_i32_s,
-        )
+        self.translate_unary(Instruction::f32_convert_i32_s, TypedVal::f32_convert_i32_s)
     }
 
     fn visit_f32_convert_i32_u(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f32_convert_i32_u,
-            TypedValue::f32_convert_i32_u,
-        )
+        self.translate_unary(Instruction::f32_convert_i32_u, TypedVal::f32_convert_i32_u)
     }
 
     fn visit_f32_convert_i64_s(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f32_convert_i64_s,
-            TypedValue::f32_convert_i64_s,
-        )
+        self.translate_unary(Instruction::f32_convert_i64_s, TypedVal::f32_convert_i64_s)
     }
 
     fn visit_f32_convert_i64_u(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f32_convert_i64_u,
-            TypedValue::f32_convert_i64_u,
-        )
+        self.translate_unary(Instruction::f32_convert_i64_u, TypedVal::f32_convert_i64_u)
     }
 
     fn visit_f32_demote_f64(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f32_demote_f64, TypedValue::f32_demote_f64)
+        self.translate_unary(Instruction::f32_demote_f64, TypedVal::f32_demote_f64)
     }
 
     fn visit_f64_convert_i32_s(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f64_convert_i32_s,
-            TypedValue::f64_convert_i32_s,
-        )
+        self.translate_unary(Instruction::f64_convert_i32_s, TypedVal::f64_convert_i32_s)
     }
 
     fn visit_f64_convert_i32_u(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f64_convert_i32_u,
-            TypedValue::f64_convert_i32_u,
-        )
+        self.translate_unary(Instruction::f64_convert_i32_u, TypedVal::f64_convert_i32_u)
     }
 
     fn visit_f64_convert_i64_s(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f64_convert_i64_s,
-            TypedValue::f64_convert_i64_s,
-        )
+        self.translate_unary(Instruction::f64_convert_i64_s, TypedVal::f64_convert_i64_s)
     }
 
     fn visit_f64_convert_i64_u(&mut self) -> Self::Output {
-        self.translate_unary(
-            Instruction::f64_convert_i64_u,
-            TypedValue::f64_convert_i64_u,
-        )
+        self.translate_unary(Instruction::f64_convert_i64_u, TypedVal::f64_convert_i64_u)
     }
 
     fn visit_f64_promote_f32(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::f64_promote_f32, TypedValue::f64_promote_f32)
+        self.translate_unary(Instruction::f64_promote_f32, TypedVal::f64_promote_f32)
     }
 
     fn visit_i32_reinterpret_f32(&mut self) -> Self::Output {
-        self.translate_reinterpret(ValueType::I32)
+        self.translate_reinterpret(ValType::I32)
     }
 
     fn visit_i64_reinterpret_f64(&mut self) -> Self::Output {
-        self.translate_reinterpret(ValueType::I64)
+        self.translate_reinterpret(ValType::I64)
     }
 
     fn visit_f32_reinterpret_i32(&mut self) -> Self::Output {
-        self.translate_reinterpret(ValueType::F32)
+        self.translate_reinterpret(ValType::F32)
     }
 
     fn visit_f64_reinterpret_i64(&mut self) -> Self::Output {
-        self.translate_reinterpret(ValueType::F64)
+        self.translate_reinterpret(ValType::F64)
     }
 
     fn visit_i32_extend8_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_extend8_s, TypedValue::i32_extend8_s)
+        self.translate_unary(Instruction::i32_extend8_s, TypedVal::i32_extend8_s)
     }
 
     fn visit_i32_extend16_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i32_extend16_s, TypedValue::i32_extend16_s)
+        self.translate_unary(Instruction::i32_extend16_s, TypedVal::i32_extend16_s)
     }
 
     fn visit_i64_extend8_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend8_s, TypedValue::i64_extend8_s)
+        self.translate_unary(Instruction::i64_extend8_s, TypedVal::i64_extend8_s)
     }
 
     fn visit_i64_extend16_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend16_s, TypedValue::i64_extend16_s)
+        self.translate_unary(Instruction::i64_extend16_s, TypedVal::i64_extend16_s)
     }
 
     fn visit_i64_extend32_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend32_s, TypedValue::i64_extend32_s)
+        self.translate_unary(Instruction::i64_extend32_s, TypedVal::i64_extend32_s)
     }
 
     fn visit_i32_trunc_sat_f32_s(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i32_trunc_sat_f32_s,
-            TypedValue::i32_trunc_sat_f32_s,
+            TypedVal::i32_trunc_sat_f32_s,
         )
     }
 
     fn visit_i32_trunc_sat_f32_u(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i32_trunc_sat_f32_u,
-            TypedValue::i32_trunc_sat_f32_u,
+            TypedVal::i32_trunc_sat_f32_u,
         )
     }
 
     fn visit_i32_trunc_sat_f64_s(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i32_trunc_sat_f64_s,
-            TypedValue::i32_trunc_sat_f64_s,
+            TypedVal::i32_trunc_sat_f64_s,
         )
     }
 
     fn visit_i32_trunc_sat_f64_u(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i32_trunc_sat_f64_u,
-            TypedValue::i32_trunc_sat_f64_u,
+            TypedVal::i32_trunc_sat_f64_u,
         )
     }
 
     fn visit_i64_trunc_sat_f32_s(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i64_trunc_sat_f32_s,
-            TypedValue::i64_trunc_sat_f32_s,
+            TypedVal::i64_trunc_sat_f32_s,
         )
     }
 
     fn visit_i64_trunc_sat_f32_u(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i64_trunc_sat_f32_u,
-            TypedValue::i64_trunc_sat_f32_u,
+            TypedVal::i64_trunc_sat_f32_u,
         )
     }
 
     fn visit_i64_trunc_sat_f64_s(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i64_trunc_sat_f64_s,
-            TypedValue::i64_trunc_sat_f64_s,
+            TypedVal::i64_trunc_sat_f64_s,
         )
     }
 
     fn visit_i64_trunc_sat_f64_u(&mut self) -> Self::Output {
         self.translate_unary(
             Instruction::i64_trunc_sat_f64_u,
-            TypedValue::i64_trunc_sat_f64_u,
+            TypedVal::i64_trunc_sat_f64_u,
         )
     }
 

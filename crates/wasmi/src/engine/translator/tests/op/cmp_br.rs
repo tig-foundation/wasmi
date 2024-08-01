@@ -1,10 +1,7 @@
-use super::{wasm_type::WasmType, *};
+use super::{wasm_type::WasmTy, *};
 use crate::{
-    core::ValueType,
-    engine::{
-        bytecode::{BranchOffset, BranchOffset16, GlobalIdx},
-        translator::tests::display_wasm::DisplayValueType,
-    },
+    core::ValType,
+    engine::bytecode::{BranchOffset, BranchOffset16, GlobalIdx},
 };
 use std::fmt::{Debug, Display};
 
@@ -12,12 +9,12 @@ use std::fmt::{Debug, Display};
 #[cfg_attr(miri, ignore)]
 fn loop_backward() {
     fn test_for(
-        ty: ValueType,
+        ty: ValType,
         op: &str,
         expect_instr: fn(Register, Register, BranchOffset16) -> Instruction,
     ) {
         let ty = DisplayValueType::from(ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param {ty} {ty})
@@ -29,8 +26,8 @@ fn loop_backward() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -42,44 +39,44 @@ fn loop_backward() {
             .run()
     }
 
-    test_for(ValueType::I32, "and", Instruction::branch_i32_and);
-    test_for(ValueType::I32, "or", Instruction::branch_i32_or);
-    test_for(ValueType::I32, "xor", Instruction::branch_i32_xor);
-    test_for(ValueType::I32, "eq", Instruction::branch_i32_eq);
-    test_for(ValueType::I32, "ne", Instruction::branch_i32_ne);
-    test_for(ValueType::I32, "lt_s", Instruction::branch_i32_lt_s);
-    test_for(ValueType::I32, "lt_u", Instruction::branch_i32_lt_u);
-    test_for(ValueType::I32, "le_s", Instruction::branch_i32_le_s);
-    test_for(ValueType::I32, "le_u", Instruction::branch_i32_le_u);
-    test_for(ValueType::I32, "gt_s", Instruction::branch_i32_gt_s);
-    test_for(ValueType::I32, "gt_u", Instruction::branch_i32_gt_u);
-    test_for(ValueType::I32, "ge_s", Instruction::branch_i32_ge_s);
-    test_for(ValueType::I32, "ge_u", Instruction::branch_i32_ge_u);
+    test_for(ValType::I32, "and", Instruction::branch_i32_and);
+    test_for(ValType::I32, "or", Instruction::branch_i32_or);
+    test_for(ValType::I32, "xor", Instruction::branch_i32_xor);
+    test_for(ValType::I32, "eq", Instruction::branch_i32_eq);
+    test_for(ValType::I32, "ne", Instruction::branch_i32_ne);
+    test_for(ValType::I32, "lt_s", Instruction::branch_i32_lt_s);
+    test_for(ValType::I32, "lt_u", Instruction::branch_i32_lt_u);
+    test_for(ValType::I32, "le_s", Instruction::branch_i32_le_s);
+    test_for(ValType::I32, "le_u", Instruction::branch_i32_le_u);
+    test_for(ValType::I32, "gt_s", Instruction::branch_i32_gt_s);
+    test_for(ValType::I32, "gt_u", Instruction::branch_i32_gt_u);
+    test_for(ValType::I32, "ge_s", Instruction::branch_i32_ge_s);
+    test_for(ValType::I32, "ge_u", Instruction::branch_i32_ge_u);
 
-    test_for(ValueType::I64, "eq", Instruction::branch_i64_eq);
-    test_for(ValueType::I64, "ne", Instruction::branch_i64_ne);
-    test_for(ValueType::I64, "lt_s", Instruction::branch_i64_lt_s);
-    test_for(ValueType::I64, "lt_u", Instruction::branch_i64_lt_u);
-    test_for(ValueType::I64, "le_s", Instruction::branch_i64_le_s);
-    test_for(ValueType::I64, "le_u", Instruction::branch_i64_le_u);
-    test_for(ValueType::I64, "gt_s", Instruction::branch_i64_gt_s);
-    test_for(ValueType::I64, "gt_u", Instruction::branch_i64_gt_u);
-    test_for(ValueType::I64, "ge_s", Instruction::branch_i64_ge_s);
-    test_for(ValueType::I64, "ge_u", Instruction::branch_i64_ge_u);
+    test_for(ValType::I64, "eq", Instruction::branch_i64_eq);
+    test_for(ValType::I64, "ne", Instruction::branch_i64_ne);
+    test_for(ValType::I64, "lt_s", Instruction::branch_i64_lt_s);
+    test_for(ValType::I64, "lt_u", Instruction::branch_i64_lt_u);
+    test_for(ValType::I64, "le_s", Instruction::branch_i64_le_s);
+    test_for(ValType::I64, "le_u", Instruction::branch_i64_le_u);
+    test_for(ValType::I64, "gt_s", Instruction::branch_i64_gt_s);
+    test_for(ValType::I64, "gt_u", Instruction::branch_i64_gt_u);
+    test_for(ValType::I64, "ge_s", Instruction::branch_i64_ge_s);
+    test_for(ValType::I64, "ge_u", Instruction::branch_i64_ge_u);
 
-    test_for(ValueType::F32, "eq", Instruction::branch_f32_eq);
-    test_for(ValueType::F32, "ne", Instruction::branch_f32_ne);
-    test_for(ValueType::F32, "lt", Instruction::branch_f32_lt);
-    test_for(ValueType::F32, "le", Instruction::branch_f32_le);
-    test_for(ValueType::F32, "gt", Instruction::branch_f32_gt);
-    test_for(ValueType::F32, "ge", Instruction::branch_f32_ge);
+    test_for(ValType::F32, "eq", Instruction::branch_f32_eq);
+    test_for(ValType::F32, "ne", Instruction::branch_f32_ne);
+    test_for(ValType::F32, "lt", Instruction::branch_f32_lt);
+    test_for(ValType::F32, "le", Instruction::branch_f32_le);
+    test_for(ValType::F32, "gt", Instruction::branch_f32_gt);
+    test_for(ValType::F32, "ge", Instruction::branch_f32_ge);
 
-    test_for(ValueType::F64, "eq", Instruction::branch_f64_eq);
-    test_for(ValueType::F64, "ne", Instruction::branch_f64_ne);
-    test_for(ValueType::F64, "lt", Instruction::branch_f64_lt);
-    test_for(ValueType::F64, "le", Instruction::branch_f64_le);
-    test_for(ValueType::F64, "gt", Instruction::branch_f64_gt);
-    test_for(ValueType::F64, "ge", Instruction::branch_f64_ge);
+    test_for(ValType::F64, "eq", Instruction::branch_f64_eq);
+    test_for(ValType::F64, "ne", Instruction::branch_f64_ne);
+    test_for(ValType::F64, "lt", Instruction::branch_f64_lt);
+    test_for(ValType::F64, "le", Instruction::branch_f64_le);
+    test_for(ValType::F64, "gt", Instruction::branch_f64_gt);
+    test_for(ValType::F64, "ge", Instruction::branch_f64_ge);
 }
 
 #[test]
@@ -90,13 +87,13 @@ fn loop_backward_imm() {
         value: T,
         expect_instr: fn(Register, Const16<T>, BranchOffset16) -> Instruction,
     ) where
-        T: WasmType,
+        T: WasmTy,
         Const16<T>: TryFrom<T> + Debug,
         DisplayWasm<T>: Display,
     {
         let ty = T::NAME;
         let display_value = DisplayWasm::from(value);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param {ty} {ty})
@@ -108,8 +105,8 @@ fn loop_backward_imm() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -151,7 +148,7 @@ fn loop_backward_imm() {
 #[cfg_attr(miri, ignore)]
 fn loop_backward_imm_eqz() {
     fn test_for(op: &str, expect_instr: fn(Register, BranchOffset16) -> Instruction) {
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param i32 i32)
@@ -163,8 +160,8 @@ fn loop_backward_imm_eqz() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(Register::from_i16(0), BranchOffset16::from(0_i16)),
                 Instruction::Return,
@@ -179,12 +176,12 @@ fn loop_backward_imm_eqz() {
 #[cfg_attr(miri, ignore)]
 fn block_forward() {
     fn test_for(
-        ty: ValueType,
+        ty: ValType,
         op: &str,
         expect_instr: fn(Register, Register, BranchOffset16) -> Instruction,
     ) {
         let ty = DisplayValueType::from(ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param {ty} {ty})
@@ -196,8 +193,8 @@ fn block_forward() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -209,56 +206,56 @@ fn block_forward() {
             .run()
     }
 
-    test_for(ValueType::I32, "and", Instruction::branch_i32_and);
-    test_for(ValueType::I32, "or", Instruction::branch_i32_or);
-    test_for(ValueType::I32, "xor", Instruction::branch_i32_xor);
-    test_for(ValueType::I32, "eq", Instruction::branch_i32_eq);
-    test_for(ValueType::I32, "ne", Instruction::branch_i32_ne);
-    test_for(ValueType::I32, "lt_s", Instruction::branch_i32_lt_s);
-    test_for(ValueType::I32, "lt_u", Instruction::branch_i32_lt_u);
-    test_for(ValueType::I32, "le_s", Instruction::branch_i32_le_s);
-    test_for(ValueType::I32, "le_u", Instruction::branch_i32_le_u);
-    test_for(ValueType::I32, "gt_s", Instruction::branch_i32_gt_s);
-    test_for(ValueType::I32, "gt_u", Instruction::branch_i32_gt_u);
-    test_for(ValueType::I32, "ge_s", Instruction::branch_i32_ge_s);
-    test_for(ValueType::I32, "ge_u", Instruction::branch_i32_ge_u);
+    test_for(ValType::I32, "and", Instruction::branch_i32_and);
+    test_for(ValType::I32, "or", Instruction::branch_i32_or);
+    test_for(ValType::I32, "xor", Instruction::branch_i32_xor);
+    test_for(ValType::I32, "eq", Instruction::branch_i32_eq);
+    test_for(ValType::I32, "ne", Instruction::branch_i32_ne);
+    test_for(ValType::I32, "lt_s", Instruction::branch_i32_lt_s);
+    test_for(ValType::I32, "lt_u", Instruction::branch_i32_lt_u);
+    test_for(ValType::I32, "le_s", Instruction::branch_i32_le_s);
+    test_for(ValType::I32, "le_u", Instruction::branch_i32_le_u);
+    test_for(ValType::I32, "gt_s", Instruction::branch_i32_gt_s);
+    test_for(ValType::I32, "gt_u", Instruction::branch_i32_gt_u);
+    test_for(ValType::I32, "ge_s", Instruction::branch_i32_ge_s);
+    test_for(ValType::I32, "ge_u", Instruction::branch_i32_ge_u);
 
-    test_for(ValueType::I64, "eq", Instruction::branch_i64_eq);
-    test_for(ValueType::I64, "ne", Instruction::branch_i64_ne);
-    test_for(ValueType::I64, "lt_s", Instruction::branch_i64_lt_s);
-    test_for(ValueType::I64, "lt_u", Instruction::branch_i64_lt_u);
-    test_for(ValueType::I64, "le_s", Instruction::branch_i64_le_s);
-    test_for(ValueType::I64, "le_u", Instruction::branch_i64_le_u);
-    test_for(ValueType::I64, "gt_s", Instruction::branch_i64_gt_s);
-    test_for(ValueType::I64, "gt_u", Instruction::branch_i64_gt_u);
-    test_for(ValueType::I64, "ge_s", Instruction::branch_i64_ge_s);
-    test_for(ValueType::I64, "ge_u", Instruction::branch_i64_ge_u);
+    test_for(ValType::I64, "eq", Instruction::branch_i64_eq);
+    test_for(ValType::I64, "ne", Instruction::branch_i64_ne);
+    test_for(ValType::I64, "lt_s", Instruction::branch_i64_lt_s);
+    test_for(ValType::I64, "lt_u", Instruction::branch_i64_lt_u);
+    test_for(ValType::I64, "le_s", Instruction::branch_i64_le_s);
+    test_for(ValType::I64, "le_u", Instruction::branch_i64_le_u);
+    test_for(ValType::I64, "gt_s", Instruction::branch_i64_gt_s);
+    test_for(ValType::I64, "gt_u", Instruction::branch_i64_gt_u);
+    test_for(ValType::I64, "ge_s", Instruction::branch_i64_ge_s);
+    test_for(ValType::I64, "ge_u", Instruction::branch_i64_ge_u);
 
-    test_for(ValueType::F32, "eq", Instruction::branch_f32_eq);
-    test_for(ValueType::F32, "ne", Instruction::branch_f32_ne);
-    test_for(ValueType::F32, "lt", Instruction::branch_f32_lt);
-    test_for(ValueType::F32, "le", Instruction::branch_f32_le);
-    test_for(ValueType::F32, "gt", Instruction::branch_f32_gt);
-    test_for(ValueType::F32, "ge", Instruction::branch_f32_ge);
+    test_for(ValType::F32, "eq", Instruction::branch_f32_eq);
+    test_for(ValType::F32, "ne", Instruction::branch_f32_ne);
+    test_for(ValType::F32, "lt", Instruction::branch_f32_lt);
+    test_for(ValType::F32, "le", Instruction::branch_f32_le);
+    test_for(ValType::F32, "gt", Instruction::branch_f32_gt);
+    test_for(ValType::F32, "ge", Instruction::branch_f32_ge);
 
-    test_for(ValueType::F64, "eq", Instruction::branch_f64_eq);
-    test_for(ValueType::F64, "ne", Instruction::branch_f64_ne);
-    test_for(ValueType::F64, "lt", Instruction::branch_f64_lt);
-    test_for(ValueType::F64, "le", Instruction::branch_f64_le);
-    test_for(ValueType::F64, "gt", Instruction::branch_f64_gt);
-    test_for(ValueType::F64, "ge", Instruction::branch_f64_ge);
+    test_for(ValType::F64, "eq", Instruction::branch_f64_eq);
+    test_for(ValType::F64, "ne", Instruction::branch_f64_ne);
+    test_for(ValType::F64, "lt", Instruction::branch_f64_lt);
+    test_for(ValType::F64, "le", Instruction::branch_f64_le);
+    test_for(ValType::F64, "gt", Instruction::branch_f64_gt);
+    test_for(ValType::F64, "ge", Instruction::branch_f64_ge);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn block_forward_nop_copy() {
     fn test_for(
-        ty: ValueType,
+        ty: ValType,
         op: &str,
         expect_instr: fn(Register, Register, BranchOffset16) -> Instruction,
     ) {
         let ty = DisplayValueType::from(ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (global $g (mut {ty}) ({ty}.const 10))
@@ -274,8 +271,8 @@ fn block_forward_nop_copy() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 Instruction::global_get(Register::from_i16(2), GlobalIdx::from(0)),
                 expect_instr(
@@ -289,56 +286,56 @@ fn block_forward_nop_copy() {
             .run()
     }
 
-    test_for(ValueType::I32, "and", Instruction::branch_i32_and);
-    test_for(ValueType::I32, "or", Instruction::branch_i32_or);
-    test_for(ValueType::I32, "xor", Instruction::branch_i32_xor);
-    test_for(ValueType::I32, "eq", Instruction::branch_i32_eq);
-    test_for(ValueType::I32, "ne", Instruction::branch_i32_ne);
-    test_for(ValueType::I32, "lt_s", Instruction::branch_i32_lt_s);
-    test_for(ValueType::I32, "lt_u", Instruction::branch_i32_lt_u);
-    test_for(ValueType::I32, "le_s", Instruction::branch_i32_le_s);
-    test_for(ValueType::I32, "le_u", Instruction::branch_i32_le_u);
-    test_for(ValueType::I32, "gt_s", Instruction::branch_i32_gt_s);
-    test_for(ValueType::I32, "gt_u", Instruction::branch_i32_gt_u);
-    test_for(ValueType::I32, "ge_s", Instruction::branch_i32_ge_s);
-    test_for(ValueType::I32, "ge_u", Instruction::branch_i32_ge_u);
+    test_for(ValType::I32, "and", Instruction::branch_i32_and);
+    test_for(ValType::I32, "or", Instruction::branch_i32_or);
+    test_for(ValType::I32, "xor", Instruction::branch_i32_xor);
+    test_for(ValType::I32, "eq", Instruction::branch_i32_eq);
+    test_for(ValType::I32, "ne", Instruction::branch_i32_ne);
+    test_for(ValType::I32, "lt_s", Instruction::branch_i32_lt_s);
+    test_for(ValType::I32, "lt_u", Instruction::branch_i32_lt_u);
+    test_for(ValType::I32, "le_s", Instruction::branch_i32_le_s);
+    test_for(ValType::I32, "le_u", Instruction::branch_i32_le_u);
+    test_for(ValType::I32, "gt_s", Instruction::branch_i32_gt_s);
+    test_for(ValType::I32, "gt_u", Instruction::branch_i32_gt_u);
+    test_for(ValType::I32, "ge_s", Instruction::branch_i32_ge_s);
+    test_for(ValType::I32, "ge_u", Instruction::branch_i32_ge_u);
 
-    test_for(ValueType::I64, "eq", Instruction::branch_i64_eq);
-    test_for(ValueType::I64, "ne", Instruction::branch_i64_ne);
-    test_for(ValueType::I64, "lt_s", Instruction::branch_i64_lt_s);
-    test_for(ValueType::I64, "lt_u", Instruction::branch_i64_lt_u);
-    test_for(ValueType::I64, "le_s", Instruction::branch_i64_le_s);
-    test_for(ValueType::I64, "le_u", Instruction::branch_i64_le_u);
-    test_for(ValueType::I64, "gt_s", Instruction::branch_i64_gt_s);
-    test_for(ValueType::I64, "gt_u", Instruction::branch_i64_gt_u);
-    test_for(ValueType::I64, "ge_s", Instruction::branch_i64_ge_s);
-    test_for(ValueType::I64, "ge_u", Instruction::branch_i64_ge_u);
+    test_for(ValType::I64, "eq", Instruction::branch_i64_eq);
+    test_for(ValType::I64, "ne", Instruction::branch_i64_ne);
+    test_for(ValType::I64, "lt_s", Instruction::branch_i64_lt_s);
+    test_for(ValType::I64, "lt_u", Instruction::branch_i64_lt_u);
+    test_for(ValType::I64, "le_s", Instruction::branch_i64_le_s);
+    test_for(ValType::I64, "le_u", Instruction::branch_i64_le_u);
+    test_for(ValType::I64, "gt_s", Instruction::branch_i64_gt_s);
+    test_for(ValType::I64, "gt_u", Instruction::branch_i64_gt_u);
+    test_for(ValType::I64, "ge_s", Instruction::branch_i64_ge_s);
+    test_for(ValType::I64, "ge_u", Instruction::branch_i64_ge_u);
 
-    test_for(ValueType::F32, "eq", Instruction::branch_f32_eq);
-    test_for(ValueType::F32, "ne", Instruction::branch_f32_ne);
-    test_for(ValueType::F32, "lt", Instruction::branch_f32_lt);
-    test_for(ValueType::F32, "le", Instruction::branch_f32_le);
-    test_for(ValueType::F32, "gt", Instruction::branch_f32_gt);
-    test_for(ValueType::F32, "ge", Instruction::branch_f32_ge);
+    test_for(ValType::F32, "eq", Instruction::branch_f32_eq);
+    test_for(ValType::F32, "ne", Instruction::branch_f32_ne);
+    test_for(ValType::F32, "lt", Instruction::branch_f32_lt);
+    test_for(ValType::F32, "le", Instruction::branch_f32_le);
+    test_for(ValType::F32, "gt", Instruction::branch_f32_gt);
+    test_for(ValType::F32, "ge", Instruction::branch_f32_ge);
 
-    test_for(ValueType::F64, "eq", Instruction::branch_f64_eq);
-    test_for(ValueType::F64, "ne", Instruction::branch_f64_ne);
-    test_for(ValueType::F64, "lt", Instruction::branch_f64_lt);
-    test_for(ValueType::F64, "le", Instruction::branch_f64_le);
-    test_for(ValueType::F64, "gt", Instruction::branch_f64_gt);
-    test_for(ValueType::F64, "ge", Instruction::branch_f64_ge);
+    test_for(ValType::F64, "eq", Instruction::branch_f64_eq);
+    test_for(ValType::F64, "ne", Instruction::branch_f64_ne);
+    test_for(ValType::F64, "lt", Instruction::branch_f64_lt);
+    test_for(ValType::F64, "le", Instruction::branch_f64_le);
+    test_for(ValType::F64, "gt", Instruction::branch_f64_gt);
+    test_for(ValType::F64, "ge", Instruction::branch_f64_ge);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn if_forward_multi_value() {
     fn test_for(
-        ty: ValueType,
+        ty: ValType,
         op: &str,
         expect_instr: fn(Register, Register, BranchOffset16) -> Instruction,
     ) {
         let ty = DisplayValueType::from(ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param {ty} {ty}) (result {ty})
@@ -353,8 +350,8 @@ fn if_forward_multi_value() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -369,42 +366,42 @@ fn if_forward_multi_value() {
             .run()
     }
 
-    test_for(ValueType::I32, "and", Instruction::branch_i32_and_eqz);
-    test_for(ValueType::I32, "or", Instruction::branch_i32_or_eqz);
-    test_for(ValueType::I32, "xor", Instruction::branch_i32_xor_eqz);
-    test_for(ValueType::I32, "eq", Instruction::branch_i32_ne);
-    test_for(ValueType::I32, "ne", Instruction::branch_i32_eq);
-    test_for(ValueType::I32, "lt_s", Instruction::branch_i32_ge_s);
-    test_for(ValueType::I32, "lt_u", Instruction::branch_i32_ge_u);
-    test_for(ValueType::I32, "le_s", Instruction::branch_i32_gt_s);
-    test_for(ValueType::I32, "le_u", Instruction::branch_i32_gt_u);
-    test_for(ValueType::I32, "gt_s", Instruction::branch_i32_le_s);
-    test_for(ValueType::I32, "gt_u", Instruction::branch_i32_le_u);
-    test_for(ValueType::I32, "ge_s", Instruction::branch_i32_lt_s);
-    test_for(ValueType::I32, "ge_u", Instruction::branch_i32_lt_u);
+    test_for(ValType::I32, "and", Instruction::branch_i32_and_eqz);
+    test_for(ValType::I32, "or", Instruction::branch_i32_or_eqz);
+    test_for(ValType::I32, "xor", Instruction::branch_i32_xor_eqz);
+    test_for(ValType::I32, "eq", Instruction::branch_i32_ne);
+    test_for(ValType::I32, "ne", Instruction::branch_i32_eq);
+    test_for(ValType::I32, "lt_s", Instruction::branch_i32_ge_s);
+    test_for(ValType::I32, "lt_u", Instruction::branch_i32_ge_u);
+    test_for(ValType::I32, "le_s", Instruction::branch_i32_gt_s);
+    test_for(ValType::I32, "le_u", Instruction::branch_i32_gt_u);
+    test_for(ValType::I32, "gt_s", Instruction::branch_i32_le_s);
+    test_for(ValType::I32, "gt_u", Instruction::branch_i32_le_u);
+    test_for(ValType::I32, "ge_s", Instruction::branch_i32_lt_s);
+    test_for(ValType::I32, "ge_u", Instruction::branch_i32_lt_u);
 
-    test_for(ValueType::I64, "eq", Instruction::branch_i64_ne);
-    test_for(ValueType::I64, "ne", Instruction::branch_i64_eq);
-    test_for(ValueType::I64, "lt_s", Instruction::branch_i64_ge_s);
-    test_for(ValueType::I64, "lt_u", Instruction::branch_i64_ge_u);
-    test_for(ValueType::I64, "le_s", Instruction::branch_i64_gt_s);
-    test_for(ValueType::I64, "le_u", Instruction::branch_i64_gt_u);
-    test_for(ValueType::I64, "gt_s", Instruction::branch_i64_le_s);
-    test_for(ValueType::I64, "gt_u", Instruction::branch_i64_le_u);
-    test_for(ValueType::I64, "ge_s", Instruction::branch_i64_lt_s);
-    test_for(ValueType::I64, "ge_u", Instruction::branch_i64_lt_u);
+    test_for(ValType::I64, "eq", Instruction::branch_i64_ne);
+    test_for(ValType::I64, "ne", Instruction::branch_i64_eq);
+    test_for(ValType::I64, "lt_s", Instruction::branch_i64_ge_s);
+    test_for(ValType::I64, "lt_u", Instruction::branch_i64_ge_u);
+    test_for(ValType::I64, "le_s", Instruction::branch_i64_gt_s);
+    test_for(ValType::I64, "le_u", Instruction::branch_i64_gt_u);
+    test_for(ValType::I64, "gt_s", Instruction::branch_i64_le_s);
+    test_for(ValType::I64, "gt_u", Instruction::branch_i64_le_u);
+    test_for(ValType::I64, "ge_s", Instruction::branch_i64_lt_s);
+    test_for(ValType::I64, "ge_u", Instruction::branch_i64_lt_u);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn if_forward() {
     fn test_for(
-        ty: ValueType,
+        ty: ValType,
         op: &str,
         expect_instr: fn(Register, Register, BranchOffset16) -> Instruction,
     ) {
         let ty = DisplayValueType::from(ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param {ty} {ty})
@@ -417,8 +414,8 @@ fn if_forward() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -430,37 +427,37 @@ fn if_forward() {
             .run()
     }
 
-    test_for(ValueType::I32, "and", Instruction::branch_i32_and_eqz);
-    test_for(ValueType::I32, "or", Instruction::branch_i32_or_eqz);
-    test_for(ValueType::I32, "xor", Instruction::branch_i32_xor_eqz);
-    test_for(ValueType::I32, "eq", Instruction::branch_i32_ne);
-    test_for(ValueType::I32, "ne", Instruction::branch_i32_eq);
-    test_for(ValueType::I32, "lt_s", Instruction::branch_i32_ge_s);
-    test_for(ValueType::I32, "lt_u", Instruction::branch_i32_ge_u);
-    test_for(ValueType::I32, "le_s", Instruction::branch_i32_gt_s);
-    test_for(ValueType::I32, "le_u", Instruction::branch_i32_gt_u);
-    test_for(ValueType::I32, "gt_s", Instruction::branch_i32_le_s);
-    test_for(ValueType::I32, "gt_u", Instruction::branch_i32_le_u);
-    test_for(ValueType::I32, "ge_s", Instruction::branch_i32_lt_s);
-    test_for(ValueType::I32, "ge_u", Instruction::branch_i32_lt_u);
+    test_for(ValType::I32, "and", Instruction::branch_i32_and_eqz);
+    test_for(ValType::I32, "or", Instruction::branch_i32_or_eqz);
+    test_for(ValType::I32, "xor", Instruction::branch_i32_xor_eqz);
+    test_for(ValType::I32, "eq", Instruction::branch_i32_ne);
+    test_for(ValType::I32, "ne", Instruction::branch_i32_eq);
+    test_for(ValType::I32, "lt_s", Instruction::branch_i32_ge_s);
+    test_for(ValType::I32, "lt_u", Instruction::branch_i32_ge_u);
+    test_for(ValType::I32, "le_s", Instruction::branch_i32_gt_s);
+    test_for(ValType::I32, "le_u", Instruction::branch_i32_gt_u);
+    test_for(ValType::I32, "gt_s", Instruction::branch_i32_le_s);
+    test_for(ValType::I32, "gt_u", Instruction::branch_i32_le_u);
+    test_for(ValType::I32, "ge_s", Instruction::branch_i32_lt_s);
+    test_for(ValType::I32, "ge_u", Instruction::branch_i32_lt_u);
 
-    test_for(ValueType::I64, "eq", Instruction::branch_i64_ne);
-    test_for(ValueType::I64, "ne", Instruction::branch_i64_eq);
-    test_for(ValueType::I64, "lt_s", Instruction::branch_i64_ge_s);
-    test_for(ValueType::I64, "lt_u", Instruction::branch_i64_ge_u);
-    test_for(ValueType::I64, "le_s", Instruction::branch_i64_gt_s);
-    test_for(ValueType::I64, "le_u", Instruction::branch_i64_gt_u);
-    test_for(ValueType::I64, "gt_s", Instruction::branch_i64_le_s);
-    test_for(ValueType::I64, "gt_u", Instruction::branch_i64_le_u);
-    test_for(ValueType::I64, "ge_s", Instruction::branch_i64_lt_s);
-    test_for(ValueType::I64, "ge_u", Instruction::branch_i64_lt_u);
+    test_for(ValType::I64, "eq", Instruction::branch_i64_ne);
+    test_for(ValType::I64, "ne", Instruction::branch_i64_eq);
+    test_for(ValType::I64, "lt_s", Instruction::branch_i64_ge_s);
+    test_for(ValType::I64, "lt_u", Instruction::branch_i64_ge_u);
+    test_for(ValType::I64, "le_s", Instruction::branch_i64_gt_s);
+    test_for(ValType::I64, "le_u", Instruction::branch_i64_gt_u);
+    test_for(ValType::I64, "gt_s", Instruction::branch_i64_le_s);
+    test_for(ValType::I64, "gt_u", Instruction::branch_i64_le_u);
+    test_for(ValType::I64, "ge_s", Instruction::branch_i64_lt_s);
+    test_for(ValType::I64, "ge_u", Instruction::branch_i64_lt_u);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn block_i32_eqz_fuse() {
     fn test_for(op: &str, expect_instr: fn(Register, Register, BranchOffset16) -> Instruction) {
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param i32 i32)
@@ -473,8 +470,8 @@ fn block_i32_eqz_fuse() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -495,7 +492,7 @@ fn block_i32_eqz_fuse() {
 #[cfg_attr(miri, ignore)]
 fn if_i32_eqz_fuse() {
     fn test_for(op: &str, expect_instr: fn(Register, Register, BranchOffset16) -> Instruction) {
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r"
             (module
                 (func (param i32 i32)
@@ -505,8 +502,8 @@ fn if_i32_eqz_fuse() {
                     )
                 )
             )",
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 expect_instr(
                     Register::from_i16(0),
@@ -526,8 +523,7 @@ fn if_i32_eqz_fuse() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn block_i64_eqz_fuse() {
-    let wasm = wat2wasm(
-        r"
+    let wasm = r"
         (module
             (func (param i64)
                 (block
@@ -535,9 +531,8 @@ fn block_i64_eqz_fuse() {
                     (br_if 0)
                 )
             )
-        )",
-    );
-    TranslationTest::new(wasm)
+        )";
+    TranslationTest::from_wat(wasm)
         .expect_func_instrs([
             Instruction::branch_i64_eqz(Register::from_i16(0), BranchOffset16::from(1)),
             Instruction::Return,
@@ -548,8 +543,7 @@ fn block_i64_eqz_fuse() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn if_i64_eqz_fuse() {
-    let wasm = wat2wasm(
-        r"
+    let wasm = r"
         (module
             (func (param i64)
                 (if
@@ -557,9 +551,8 @@ fn if_i64_eqz_fuse() {
                     (then)
                 )
             )
-        )",
-    );
-    TranslationTest::new(wasm)
+        )";
+    TranslationTest::from_wat(wasm)
         .expect_func_instrs([
             Instruction::branch_i64_nez(Register::from_i16(0), BranchOffset16::from(1)),
             Instruction::Return,

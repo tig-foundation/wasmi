@@ -1,14 +1,17 @@
 mod consts;
+mod locals;
 mod provider;
 mod register_alloc;
 
 pub use self::{
     consts::{FuncLocalConsts, FuncLocalConstsIter},
+    locals::LocalRefs,
     provider::{ProviderStack, TaggedProvider},
     register_alloc::{RegisterAlloc, RegisterSpace},
 };
-use super::TypedValue;
+use super::{PreservedLocal, TypedVal};
 use crate::{
+    core::UntypedVal,
     engine::{
         bytecode::{Provider, Register, RegisterSpan, UntypedProvider},
         TranslationError,
@@ -16,25 +19,24 @@ use crate::{
     Error,
     FuncType,
 };
-use alloc::vec::Vec;
-use wasmi_core::UntypedValue;
+use std::vec::Vec;
 
 /// Typed inputs to Wasmi bytecode instructions.
 ///
-/// Either a [`Register`] or a constant [`UntypedValue`].
+/// Either a [`Register`] or a constant [`UntypedVal`].
 ///
 /// # Note
 ///
 /// The [`TypedProvider`] is used primarily during translation of a Wasmi
 /// function where types of constant values play an important role.
-pub type TypedProvider = Provider<TypedValue>;
+pub type TypedProvider = Provider<TypedVal>;
 
 impl TypedProvider {
     /// Converts the [`TypedProvider`] to a resolved [`UntypedProvider`].
     pub fn into_untyped(self) -> UntypedProvider {
         match self {
             Self::Register(register) => UntypedProvider::Register(register),
-            Self::Const(value) => UntypedProvider::Const(UntypedValue::from(value)),
+            Self::Const(value) => UntypedProvider::Const(UntypedVal::from(value)),
         }
     }
 
@@ -107,7 +109,7 @@ impl ValueStack {
         Ok(results)
     }
 
-    /// Preserves `local.get` on the [`ProviderStack`] by shifting to storage space.
+    /// Preserves `local.get` on the [`ProviderStack`] by shifting to the preservation space.
     ///
     /// In case there are `local.get n` with `n == preserve_index` on the [`ProviderStack`]
     /// there is a [`Register`] on the storage space allocated for them. The [`Register`]
@@ -115,6 +117,24 @@ impl ValueStack {
     pub fn preserve_locals(&mut self, preserve_index: u32) -> Result<Option<Register>, Error> {
         self.providers
             .preserve_locals(preserve_index, &mut self.reg_alloc)
+    }
+
+    /// Preserves all locals on the [`ProviderStack`] by shifting them to the preservation space.
+    ///
+    /// Calls `f(local_register, preserved_register)` for each `local_register` preserved this way with its
+    /// newly allocated `preserved_register` on the presevation register space.
+    pub fn preserve_all_locals(
+        &mut self,
+        f: impl FnMut(PreservedLocal) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.providers.preserve_all_locals(&mut self.reg_alloc, f)
+    }
+
+    /// Frees all preservation slots that have been flagged for removal.
+    ///
+    /// This is important to allow them for reuse for future preservations.
+    pub fn gc_preservations(&mut self) {
+        self.reg_alloc.gc_preservations()
     }
 
     /// Returns the number of [`Provider`] on the [`ValueStack`].
@@ -164,7 +184,7 @@ impl ValueStack {
     /// Constant values allocated this way are deduplicated and return shared [`Register`].
     pub fn alloc_const<T>(&mut self, value: T) -> Result<Register, Error>
     where
-        T: Into<UntypedValue>,
+        T: Into<UntypedVal>,
     {
         self.consts.alloc(value.into())
     }
@@ -198,7 +218,7 @@ impl ValueStack {
     /// Pushes a constant value to the [`ProviderStack`].
     pub fn push_const<T>(&mut self, value: T)
     where
-        T: Into<TypedValue>,
+        T: Into<TypedVal>,
     {
         self.providers.push_const_value(value)
     }

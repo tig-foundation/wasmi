@@ -1,12 +1,5 @@
 use super::*;
-use crate::{
-    core::ValueType,
-    engine::translator::tests::{
-        display_wasm::DisplayValueType,
-        driver::ExpectedFunc,
-        wasm_type::WasmType,
-    },
-};
+use crate::{core::ValType, engine::translator::tests::wasm_type::WasmTy};
 use core::{fmt, fmt::Display};
 
 /// Tells which kind of `select` instruction to test.
@@ -24,12 +17,12 @@ struct DisplaySelect {
     /// The kind of the `select` instruction.
     kind: SelectKind,
     /// The `result` type of the `select` instruction.
-    ty: ValueType,
+    ty: ValType,
 }
 
 impl DisplaySelect {
     /// Creates a new [`DisplaySelect`].
-    fn new(kind: SelectKind, ty: ValueType) -> Self {
+    fn new(kind: SelectKind, ty: ValType) -> Self {
         Self { kind, ty }
     }
 }
@@ -48,10 +41,10 @@ impl Display for DisplaySelect {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn reg() {
-    fn test_reg(kind: SelectKind, result_ty: ValueType) {
+    fn test_reg(kind: SelectKind, result_ty: ValType) {
         let display_ty = DisplayValueType::from(result_ty);
         let display_select = DisplaySelect::new(kind, result_ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r#"
             (module
                 (func (param $condition i32)
@@ -65,12 +58,12 @@ fn reg() {
                 )
             )
         "#,
-        ));
+        );
         let condition = Register::from_i16(0);
         let lhs = Register::from_i16(1);
         let rhs = Register::from_i16(2);
         let result = Register::from_i16(3);
-        TranslationTest::new(wasm)
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([
                 Instruction::select(result, condition, lhs),
                 Instruction::Register(rhs),
@@ -79,24 +72,24 @@ fn reg() {
             .run();
     }
     fn test_for(kind: SelectKind) {
-        test_reg(kind, ValueType::I32);
-        test_reg(kind, ValueType::I64);
-        test_reg(kind, ValueType::F32);
-        test_reg(kind, ValueType::F64);
+        test_reg(kind, ValType::I32);
+        test_reg(kind, ValType::I64);
+        test_reg(kind, ValType::F32);
+        test_reg(kind, ValType::F64);
     }
     test_for(SelectKind::Select);
     test_for(SelectKind::TypedSelect);
-    test_reg(SelectKind::TypedSelect, ValueType::FuncRef);
-    test_reg(SelectKind::TypedSelect, ValueType::ExternRef);
+    test_reg(SelectKind::TypedSelect, ValType::FuncRef);
+    test_reg(SelectKind::TypedSelect, ValType::ExternRef);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn same_reg() {
-    fn test_same_reg(kind: SelectKind, result_ty: ValueType) {
+    fn test_same_reg(kind: SelectKind, result_ty: ValType) {
         let display_ty = DisplayValueType::from(result_ty);
         let display_select = DisplaySelect::new(kind, result_ty);
-        let wasm = wat2wasm(&format!(
+        let wasm = format!(
             r#"
             (module
                 (func (param $condition i32) (param $input {display_ty}) (result {display_ty})
@@ -107,33 +100,33 @@ fn same_reg() {
                 )
             )
         "#,
-        ));
-        TranslationTest::new(wasm)
+        );
+        TranslationTest::from_wat(&wasm)
             .expect_func_instrs([Instruction::return_reg(Register::from_i16(1))])
             .run();
     }
     fn test_for(kind: SelectKind) {
-        test_same_reg(kind, ValueType::I32);
-        test_same_reg(kind, ValueType::I64);
-        test_same_reg(kind, ValueType::F32);
-        test_same_reg(kind, ValueType::F64);
+        test_same_reg(kind, ValType::I32);
+        test_same_reg(kind, ValType::I64);
+        test_same_reg(kind, ValType::F32);
+        test_same_reg(kind, ValType::F64);
     }
     test_for(SelectKind::Select);
     test_for(SelectKind::TypedSelect);
-    test_same_reg(SelectKind::TypedSelect, ValueType::FuncRef);
-    test_same_reg(SelectKind::TypedSelect, ValueType::ExternRef);
+    test_same_reg(SelectKind::TypedSelect, ValType::FuncRef);
+    test_same_reg(SelectKind::TypedSelect, ValType::ExternRef);
 }
 
 fn test_same_imm<T>(kind: SelectKind, input: T) -> TranslationTest
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::VALUE_TYPE;
     let display_ty = DisplayValueType::from(ty);
     let display_input = DisplayWasm::from(input);
     let display_select = DisplaySelect::new(kind, ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param $condition i32) (param $input {display_ty}) (result {display_ty})
@@ -144,8 +137,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 #[test]
@@ -153,7 +146,7 @@ where
 fn same_imm32() {
     fn test_for_kind<T>(kind: SelectKind, value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -165,7 +158,7 @@ fn same_imm32() {
 
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -241,7 +234,7 @@ fn same_f64imm32() {
 fn same_imm() {
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         let instrs = [Instruction::return_reg(Register::from_i16(-1))];
@@ -271,14 +264,14 @@ fn same_imm() {
 
 fn test_reg_imm<T>(kind: SelectKind, rhs: T) -> TranslationTest
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::VALUE_TYPE;
     let display_ty = DisplayValueType::from(ty);
     let display_rhs = DisplayWasm::from(rhs);
     let display_select = DisplaySelect::new(kind, ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param $condition i32) (param $lhs {display_ty}) (result {display_ty})
@@ -289,8 +282,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 #[test]
@@ -298,7 +291,7 @@ where
 fn reg_imm32() {
     fn test_for_kind<T>(kind: SelectKind, value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -315,7 +308,7 @@ fn reg_imm32() {
 
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -349,7 +342,7 @@ fn reg_imm32() {
 fn reg_imm() {
     fn test_for_kind<T>(kind: SelectKind, value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         let result = Register::from_i16(2);
@@ -366,7 +359,7 @@ fn reg_imm() {
 
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         test_for_kind(SelectKind::Select, value);
@@ -450,14 +443,14 @@ fn reg_f64imm32() {
 
 fn test_imm_reg<T>(kind: SelectKind, lhs: T) -> TranslationTest
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::VALUE_TYPE;
     let display_ty = DisplayValueType::from(ty);
     let display_lhs = DisplayWasm::from(lhs);
     let display_select = DisplaySelect::new(kind, ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param $condition i32) (param $rhs {display_ty}) (result {display_ty})
@@ -468,8 +461,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 #[test]
@@ -477,7 +470,7 @@ where
 fn imm32_reg() {
     fn test_for_kind<T>(kind: SelectKind, value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -494,7 +487,7 @@ fn imm32_reg() {
 
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -528,7 +521,7 @@ fn imm32_reg() {
 fn imm_reg() {
     fn test_for_kind<T>(kind: SelectKind, value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         let result = Register::from_i16(2);
@@ -545,7 +538,7 @@ fn imm_reg() {
 
     fn test_for<T>(value: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         test_for_kind(SelectKind::Select, value);
@@ -629,7 +622,7 @@ fn f64imm32_reg() {
 
 fn test_both_imm<T>(kind: SelectKind, lhs: T, rhs: T) -> TranslationTest
 where
-    T: WasmType,
+    T: WasmTy,
     DisplayWasm<T>: Display,
 {
     let ty = T::VALUE_TYPE;
@@ -637,7 +630,7 @@ where
     let display_lhs = DisplayWasm::from(lhs);
     let display_rhs = DisplayWasm::from(rhs);
     let display_select = DisplaySelect::new(kind, ty);
-    let wasm = wat2wasm(&format!(
+    let wasm = format!(
         r#"
         (module
             (func (param $condition i32) (result {display_ty})
@@ -648,8 +641,8 @@ where
             )
         )
     "#,
-    ));
-    TranslationTest::new(wasm)
+    );
+    TranslationTest::from_wat(&wasm)
 }
 
 #[test]
@@ -657,7 +650,7 @@ where
 fn both_imm32() {
     fn test_for_kind<T>(kind: SelectKind, lhs: T, rhs: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -677,7 +670,7 @@ fn both_imm32() {
 
     fn test_for<T>(lhs: T, rhs: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
         AnyConst32: From<T>,
     {
@@ -703,7 +696,7 @@ fn both_imm32() {
 fn both_imm() {
     fn test_for_kind<T>(kind: SelectKind, lhs: T, rhs: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         let result = Register::from_i16(1);
@@ -722,7 +715,7 @@ fn both_imm() {
 
     fn test_for<T>(lhs: T, rhs: T)
     where
-        T: WasmType,
+        T: WasmTy,
         DisplayWasm<T>: Display,
     {
         test_for_kind(SelectKind::Select, lhs, rhs);

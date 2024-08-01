@@ -6,12 +6,12 @@ use crate::{
     },
     Error,
 };
-use alloc::collections::BTreeSet;
 use core::{
     cmp::{max, min},
     num::NonZeroUsize,
 };
 use multi_stash::{Key, Key as StashKey, MultiStash};
+use std::collections::BTreeSet;
 
 #[cfg(doc)]
 use crate::engine::translator::InstrEncoder;
@@ -128,7 +128,10 @@ pub enum RegisterSpace {
 
 impl RegisterAlloc {
     /// The maximum amount of local variables (and function parameters) a function may define.
-    const MAX_LEN_LOCALS: u16 = i16::MAX as u16;
+    const MAX_LEN_LOCALS: u16 = i16::MAX as u16 - 1;
+
+    /// The initial preservation register index.
+    const INITIAL_PRESERVATION_INDEX: i16 = i16::MAX - 1;
 
     /// Resets the [`RegisterAlloc`] to start compiling a new function.
     pub fn reset(&mut self) {
@@ -137,7 +140,8 @@ impl RegisterAlloc {
         self.len_locals = 0;
         self.next_dynamic = 0;
         self.max_dynamic = 0;
-        self.min_preserve = i16::MAX;
+        self.min_preserve = Self::INITIAL_PRESERVATION_INDEX;
+        self.defrag_offset = 0;
     }
 
     /// Adjusts the [`RegisterAlloc`] for the popped [`TaggedProvider`] and returns a [`TypedProvider`].
@@ -183,7 +187,7 @@ impl RegisterAlloc {
 
     /// Returns the number of registers allocated by the [`RegisterAlloc`].
     pub fn len_registers(&self) -> u16 {
-        (i16::MAX as u16) - self.max_dynamic.abs_diff(self.min_preserve)
+        Self::MAX_LEN_LOCALS - self.max_dynamic.abs_diff(self.min_preserve)
     }
 
     /// Registers an `amount` of function inputs or local variables.
@@ -334,6 +338,22 @@ impl RegisterAlloc {
             None => unreachable!(),
         };
         self.assert_alloc_phase();
+        // Now we can clear the removed preserved registers.
+        self.removed_preserved.clear();
+        let key = self.preservations.put(NZ_TWO, ());
+        let reg = Self::key2reg(key);
+        self.update_min_preserved(reg.prev())?;
+        Ok(reg)
+    }
+
+    /// Frees all preservation slots that are flagged for removal.
+    ///
+    /// This is important to allow them for reuse for future preservations.
+    pub fn gc_preservations(&mut self) {
+        self.assert_alloc_phase();
+        if self.removed_preserved.is_empty() {
+            return;
+        }
         for &key in &self.removed_preserved {
             let entry = self.preservations.get(key);
             debug_assert!(
@@ -348,12 +368,6 @@ impl RegisterAlloc {
                 self.preservations.take_all(key);
             }
         }
-        // Now we can clear the removed preserved registers.
-        self.removed_preserved.clear();
-        let key = self.preservations.put(NZ_TWO, ());
-        let reg = Self::key2reg(key);
-        self.update_min_preserved(reg.prev())?;
-        Ok(reg)
     }
 
     /// Bumps the [`Register`] quantity on the preservation stack by one.
@@ -401,7 +415,7 @@ impl RegisterAlloc {
 
     /// Converts a preservation [`Register`] into a [`StashKey`].
     fn reg2key(register: Register) -> StashKey {
-        let reg_index = i16::MAX - register.to_i16();
+        let reg_index = Self::INITIAL_PRESERVATION_INDEX - register.to_i16();
         let key_index = usize::try_from(reg_index).unwrap_or_else(|error| {
             panic!("reg_index ({reg_index}) must be convertible to usize: {error}")
         });
@@ -411,7 +425,7 @@ impl RegisterAlloc {
     /// Converts a [`StashKey`] into a preservation [`Register`].
     fn key2reg(key: StashKey) -> Register {
         let key_index = usize::from(key);
-        let reg_index = i16::MAX
+        let reg_index = Self::INITIAL_PRESERVATION_INDEX
             - i16::try_from(key_index).unwrap_or_else(|error| {
                 panic!(
                     "key_index ({key_index}) must be convertible to positive i16 integer: {error}"
