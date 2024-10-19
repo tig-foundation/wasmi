@@ -1232,617 +1232,397 @@ impl<'engine> Executor<'engine> {
                 Instr::F64StoreAt { address, value } => {
                     self.execute_f64_store_at(&mut store.inner, address, value)?
                 }
-                Instr::I32Eq { result, lhs, rhs } => {
-                    self.execute_i32_eq(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Eq { result, lhs, rhs } => self.execute_i32_eq(result, lhs, rhs),
                 Instr::I32EqImm16 { result, lhs, rhs } => {
-                    self.execute_i32_eq_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_eq_imm16(result, lhs, rhs)
                 }
-                Instr::I32Ne { result, lhs, rhs } => {
-                    self.execute_i32_ne(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Ne { result, lhs, rhs } => self.execute_i32_ne(result, lhs, rhs),
                 Instr::I32NeImm16 { result, lhs, rhs } => {
-                    self.execute_i32_ne_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_ne_imm16(result, lhs, rhs)
                 }
-                Instr::I32LtS { result, lhs, rhs } => {
-                    self.execute_i32_lt_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32LtS { result, lhs, rhs } => self.execute_i32_lt_s(result, lhs, rhs),
                 Instr::I32LtSImm16 { result, lhs, rhs } => {
-                    self.execute_i32_lt_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_lt_s_imm16(result, lhs, rhs)
                 }
-                Instr::I32LtU { result, lhs, rhs } => {
-                    self.execute_i32_lt_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32LtU { result, lhs, rhs } => self.execute_i32_lt_u(result, lhs, rhs),
                 Instr::I32LtUImm16 { result, lhs, rhs } => {
-                    self.execute_i32_lt_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_lt_u_imm16(result, lhs, rhs)
                 }
-                Instr::I32LeS { result, lhs, rhs } => {
-                    self.execute_i32_le_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32LeS { result, lhs, rhs } => self.execute_i32_le_s(result, lhs, rhs),
                 Instr::I32LeSImm16 { result, lhs, rhs } => {
-                    self.execute_i32_le_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_le_s_imm16(result, lhs, rhs)
                 }
-                Instr::I32LeU { result, lhs, rhs } => {
-                    self.execute_i32_le_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32LeU { result, lhs, rhs } => self.execute_i32_le_u(result, lhs, rhs),
                 Instr::I32LeUImm16 { result, lhs, rhs } => {
-                    self.execute_i32_le_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_le_u_imm16(result, lhs, rhs)
                 }
-                Instr::I32GtS { result, lhs, rhs } => {
-                    self.execute_i32_gt_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32GtS { result, lhs, rhs } => self.execute_i32_gt_s(result, lhs, rhs),
                 Instr::I32GtSImm16 { result, lhs, rhs } => {
-                    self.execute_i32_gt_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_gt_s_imm16(result, lhs, rhs)
                 }
-                Instr::I32GtU { result, lhs, rhs } => {
-                    self.execute_i32_gt_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32GtU { result, lhs, rhs } => self.execute_i32_gt_u(result, lhs, rhs),
                 Instr::I32GtUImm16 { result, lhs, rhs } => {
-                    self.execute_i32_gt_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_gt_u_imm16(result, lhs, rhs)
                 }
-                Instr::I32GeS { result, lhs, rhs } => {
-                    self.execute_i32_ge_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32GeS { result, lhs, rhs } => self.execute_i32_ge_s(result, lhs, rhs),
                 Instr::I32GeSImm16 { result, lhs, rhs } => {
-                    self.execute_i32_ge_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_ge_s_imm16(result, lhs, rhs)
                 }
-                Instr::I32GeU { result, lhs, rhs } => {
-                    self.execute_i32_ge_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32GeU { result, lhs, rhs } => self.execute_i32_ge_u(result, lhs, rhs),
                 Instr::I32GeUImm16 { result, lhs, rhs } => {
-                    self.execute_i32_ge_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_ge_u_imm16(result, lhs, rhs)
                 }
-                Instr::I64Eq { result, lhs, rhs } => {
-                    self.execute_i64_eq(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Eq { result, lhs, rhs } => self.execute_i64_eq(result, lhs, rhs),
                 Instr::I64EqImm16 { result, lhs, rhs } => {
-                    self.execute_i64_eq_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_eq_imm16(result, lhs, rhs)
                 }
-                Instr::I64Ne { result, lhs, rhs } => {
-                    self.execute_i64_ne(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Ne { result, lhs, rhs } => self.execute_i64_ne(result, lhs, rhs),
                 Instr::I64NeImm16 { result, lhs, rhs } => {
-                    self.execute_i64_ne_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_ne_imm16(result, lhs, rhs)
                 }
-                Instr::I64LtS { result, lhs, rhs } => {
-                    self.execute_i64_lt_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64LtS { result, lhs, rhs } => self.execute_i64_lt_s(result, lhs, rhs),
                 Instr::I64LtSImm16 { result, lhs, rhs } => {
-                    self.execute_i64_lt_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_lt_s_imm16(result, lhs, rhs)
                 }
-                Instr::I64LtU { result, lhs, rhs } => {
-                    self.execute_i64_lt_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64LtU { result, lhs, rhs } => self.execute_i64_lt_u(result, lhs, rhs),
                 Instr::I64LtUImm16 { result, lhs, rhs } => {
-                    self.execute_i64_lt_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_lt_u_imm16(result, lhs, rhs)
                 }
-                Instr::I64LeS { result, lhs, rhs } => {
-                    self.execute_i64_le_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64LeS { result, lhs, rhs } => self.execute_i64_le_s(result, lhs, rhs),
                 Instr::I64LeSImm16 { result, lhs, rhs } => {
-                    self.execute_i64_le_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_le_s_imm16(result, lhs, rhs)
                 }
-                Instr::I64LeU { result, lhs, rhs } => {
-                    self.execute_i64_le_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64LeU { result, lhs, rhs } => self.execute_i64_le_u(result, lhs, rhs),
                 Instr::I64LeUImm16 { result, lhs, rhs } => {
-                    self.execute_i64_le_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_le_u_imm16(result, lhs, rhs)
                 }
-                Instr::I64GtS { result, lhs, rhs } => {
-                    self.execute_i64_gt_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64GtS { result, lhs, rhs } => self.execute_i64_gt_s(result, lhs, rhs),
                 Instr::I64GtSImm16 { result, lhs, rhs } => {
-                    self.execute_i64_gt_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_gt_s_imm16(result, lhs, rhs)
                 }
-                Instr::I64GtU { result, lhs, rhs } => {
-                    self.execute_i64_gt_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64GtU { result, lhs, rhs } => self.execute_i64_gt_u(result, lhs, rhs),
                 Instr::I64GtUImm16 { result, lhs, rhs } => {
-                    self.execute_i64_gt_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_gt_u_imm16(result, lhs, rhs)
                 }
-                Instr::I64GeS { result, lhs, rhs } => {
-                    self.execute_i64_ge_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64GeS { result, lhs, rhs } => self.execute_i64_ge_s(result, lhs, rhs),
                 Instr::I64GeSImm16 { result, lhs, rhs } => {
-                    self.execute_i64_ge_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_ge_s_imm16(result, lhs, rhs)
                 }
-                Instr::I64GeU { result, lhs, rhs } => {
-                    self.execute_i64_ge_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64GeU { result, lhs, rhs } => self.execute_i64_ge_u(result, lhs, rhs),
                 Instr::I64GeUImm16 { result, lhs, rhs } => {
-                    self.execute_i64_ge_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_ge_u_imm16(result, lhs, rhs)
                 }
-                Instr::F32Eq { result, lhs, rhs } => {
-                    self.execute_f32_eq(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Ne { result, lhs, rhs } => {
-                    self.execute_f32_ne(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Lt { result, lhs, rhs } => {
-                    self.execute_f32_lt(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Le { result, lhs, rhs } => {
-                    self.execute_f32_le(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Gt { result, lhs, rhs } => {
-                    self.execute_f32_gt(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Ge { result, lhs, rhs } => {
-                    self.execute_f32_ge(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Eq { result, lhs, rhs } => {
-                    self.execute_f64_eq(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Ne { result, lhs, rhs } => {
-                    self.execute_f64_ne(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Lt { result, lhs, rhs } => {
-                    self.execute_f64_lt(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Le { result, lhs, rhs } => {
-                    self.execute_f64_le(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Gt { result, lhs, rhs } => {
-                    self.execute_f64_gt(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Ge { result, lhs, rhs } => {
-                    self.execute_f64_ge(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32Clz { result, input } => {
-                    self.execute_i32_clz(&mut store.inner, result, input)
-                }
-                Instr::I32Ctz { result, input } => {
-                    self.execute_i32_ctz(&mut store.inner, result, input)
-                }
-                Instr::I32Popcnt { result, input } => {
-                    self.execute_i32_popcnt(&mut store.inner, result, input)
-                }
-                Instr::I32Add { result, lhs, rhs } => {
-                    self.execute_i32_add(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::F32Eq { result, lhs, rhs } => self.execute_f32_eq(result, lhs, rhs),
+                Instr::F32Ne { result, lhs, rhs } => self.execute_f32_ne(result, lhs, rhs),
+                Instr::F32Lt { result, lhs, rhs } => self.execute_f32_lt(result, lhs, rhs),
+                Instr::F32Le { result, lhs, rhs } => self.execute_f32_le(result, lhs, rhs),
+                Instr::F32Gt { result, lhs, rhs } => self.execute_f32_gt(result, lhs, rhs),
+                Instr::F32Ge { result, lhs, rhs } => self.execute_f32_ge(result, lhs, rhs),
+                Instr::F64Eq { result, lhs, rhs } => self.execute_f64_eq(result, lhs, rhs),
+                Instr::F64Ne { result, lhs, rhs } => self.execute_f64_ne(result, lhs, rhs),
+                Instr::F64Lt { result, lhs, rhs } => self.execute_f64_lt(result, lhs, rhs),
+                Instr::F64Le { result, lhs, rhs } => self.execute_f64_le(result, lhs, rhs),
+                Instr::F64Gt { result, lhs, rhs } => self.execute_f64_gt(result, lhs, rhs),
+                Instr::F64Ge { result, lhs, rhs } => self.execute_f64_ge(result, lhs, rhs),
+                Instr::I32Clz { result, input } => self.execute_i32_clz(result, input),
+                Instr::I32Ctz { result, input } => self.execute_i32_ctz(result, input),
+                Instr::I32Popcnt { result, input } => self.execute_i32_popcnt(result, input),
+                Instr::I32Add { result, lhs, rhs } => self.execute_i32_add(result, lhs, rhs),
                 Instr::I32AddImm16 { result, lhs, rhs } => {
-                    self.execute_i32_add_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_add_imm16(result, lhs, rhs)
                 }
-                Instr::I32Sub { result, lhs, rhs } => {
-                    self.execute_i32_sub(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Sub { result, lhs, rhs } => self.execute_i32_sub(result, lhs, rhs),
                 Instr::I32SubImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i32_sub_imm16_lhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_sub_imm16_lhs(result, lhs, rhs)
                 }
-                Instr::I32Mul { result, lhs, rhs } => {
-                    self.execute_i32_mul(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Mul { result, lhs, rhs } => self.execute_i32_mul(result, lhs, rhs),
                 Instr::I32MulImm16 { result, lhs, rhs } => {
-                    self.execute_i32_mul_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_mul_imm16(result, lhs, rhs)
                 }
-                Instr::I32DivS { result, lhs, rhs } => {
-                    self.execute_i32_div_s(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I32DivS { result, lhs, rhs } => self.execute_i32_div_s(result, lhs, rhs)?,
                 Instr::I32DivSImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i32_div_s_imm16_rhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_div_s_imm16_rhs(result, lhs, rhs)?
                 }
                 Instr::I32DivSImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i32_div_s_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_div_s_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I32DivU { result, lhs, rhs } => {
-                    self.execute_i32_div_u(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I32DivU { result, lhs, rhs } => self.execute_i32_div_u(result, lhs, rhs)?,
                 Instr::I32DivUImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i32_div_u_imm16_rhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_div_u_imm16_rhs(result, lhs, rhs)
                 }
                 Instr::I32DivUImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i32_div_u_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_div_u_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I32RemS { result, lhs, rhs } => {
-                    self.execute_i32_rem_s(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I32RemS { result, lhs, rhs } => self.execute_i32_rem_s(result, lhs, rhs)?,
                 Instr::I32RemSImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i32_rem_s_imm16_rhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_rem_s_imm16_rhs(result, lhs, rhs)?
                 }
                 Instr::I32RemSImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i32_rem_s_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_rem_s_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I32RemU { result, lhs, rhs } => {
-                    self.execute_i32_rem_u(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I32RemU { result, lhs, rhs } => self.execute_i32_rem_u(result, lhs, rhs)?,
                 Instr::I32RemUImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i32_rem_u_imm16_rhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_rem_u_imm16_rhs(result, lhs, rhs)
                 }
                 Instr::I32RemUImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i32_rem_u_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i32_rem_u_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I32And { result, lhs, rhs } => {
-                    self.execute_i32_and(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32AndEqz { result, lhs, rhs } => {
-                    self.execute_i32_and_eqz(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32And { result, lhs, rhs } => self.execute_i32_and(result, lhs, rhs),
+                Instr::I32AndEqz { result, lhs, rhs } => self.execute_i32_and_eqz(result, lhs, rhs),
                 Instr::I32AndEqzImm16 { result, lhs, rhs } => {
-                    self.execute_i32_and_eqz_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_and_eqz_imm16(result, lhs, rhs)
                 }
                 Instr::I32AndImm16 { result, lhs, rhs } => {
-                    self.execute_i32_and_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_and_imm16(result, lhs, rhs)
                 }
-                Instr::I32Or { result, lhs, rhs } => {
-                    self.execute_i32_or(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32OrEqz { result, lhs, rhs } => {
-                    self.execute_i32_or_eqz(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Or { result, lhs, rhs } => self.execute_i32_or(result, lhs, rhs),
+                Instr::I32OrEqz { result, lhs, rhs } => self.execute_i32_or_eqz(result, lhs, rhs),
                 Instr::I32OrEqzImm16 { result, lhs, rhs } => {
-                    self.execute_i32_or_eqz_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_or_eqz_imm16(result, lhs, rhs)
                 }
                 Instr::I32OrImm16 { result, lhs, rhs } => {
-                    self.execute_i32_or_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_or_imm16(result, lhs, rhs)
                 }
-                Instr::I32Xor { result, lhs, rhs } => {
-                    self.execute_i32_xor(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32XorEqz { result, lhs, rhs } => {
-                    self.execute_i32_xor_eqz(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Xor { result, lhs, rhs } => self.execute_i32_xor(result, lhs, rhs),
+                Instr::I32XorEqz { result, lhs, rhs } => self.execute_i32_xor_eqz(result, lhs, rhs),
                 Instr::I32XorEqzImm16 { result, lhs, rhs } => {
-                    self.execute_i32_xor_eqz_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_xor_eqz_imm16(result, lhs, rhs)
                 }
                 Instr::I32XorImm16 { result, lhs, rhs } => {
-                    self.execute_i32_xor_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_xor_imm16(result, lhs, rhs)
                 }
-                Instr::I32Shl { result, lhs, rhs } => {
-                    self.execute_i32_shl(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32ShlBy { result, lhs, rhs } => {
-                    self.execute_i32_shl_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Shl { result, lhs, rhs } => self.execute_i32_shl(result, lhs, rhs),
+                Instr::I32ShlBy { result, lhs, rhs } => self.execute_i32_shl_by(result, lhs, rhs),
                 Instr::I32ShlImm16 { result, lhs, rhs } => {
-                    self.execute_i32_shl_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_shl_imm16(result, lhs, rhs)
                 }
-                Instr::I32ShrU { result, lhs, rhs } => {
-                    self.execute_i32_shr_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32ShrU { result, lhs, rhs } => self.execute_i32_shr_u(result, lhs, rhs),
                 Instr::I32ShrUBy { result, lhs, rhs } => {
-                    self.execute_i32_shr_u_by(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_shr_u_by(result, lhs, rhs)
                 }
                 Instr::I32ShrUImm16 { result, lhs, rhs } => {
-                    self.execute_i32_shr_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_shr_u_imm16(result, lhs, rhs)
                 }
-                Instr::I32ShrS { result, lhs, rhs } => {
-                    self.execute_i32_shr_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32ShrS { result, lhs, rhs } => self.execute_i32_shr_s(result, lhs, rhs),
                 Instr::I32ShrSBy { result, lhs, rhs } => {
-                    self.execute_i32_shr_s_by(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_shr_s_by(result, lhs, rhs)
                 }
                 Instr::I32ShrSImm16 { result, lhs, rhs } => {
-                    self.execute_i32_shr_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_shr_s_imm16(result, lhs, rhs)
                 }
-                Instr::I32Rotl { result, lhs, rhs } => {
-                    self.execute_i32_rotl(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32RotlBy { result, lhs, rhs } => {
-                    self.execute_i32_rotl_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Rotl { result, lhs, rhs } => self.execute_i32_rotl(result, lhs, rhs),
+                Instr::I32RotlBy { result, lhs, rhs } => self.execute_i32_rotl_by(result, lhs, rhs),
                 Instr::I32RotlImm16 { result, lhs, rhs } => {
-                    self.execute_i32_rotl_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_rotl_imm16(result, lhs, rhs)
                 }
-                Instr::I32Rotr { result, lhs, rhs } => {
-                    self.execute_i32_rotr(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I32RotrBy { result, lhs, rhs } => {
-                    self.execute_i32_rotr_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32Rotr { result, lhs, rhs } => self.execute_i32_rotr(result, lhs, rhs),
+                Instr::I32RotrBy { result, lhs, rhs } => self.execute_i32_rotr_by(result, lhs, rhs),
                 Instr::I32RotrImm16 { result, lhs, rhs } => {
-                    self.execute_i32_rotr_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i32_rotr_imm16(result, lhs, rhs)
                 }
-                Instr::I64Clz { result, input } => {
-                    self.execute_i64_clz(&mut store.inner, result, input)
-                }
-                Instr::I64Ctz { result, input } => {
-                    self.execute_i64_ctz(&mut store.inner, result, input)
-                }
-                Instr::I64Popcnt { result, input } => {
-                    self.execute_i64_popcnt(&mut store.inner, result, input)
-                }
-                Instr::I64Add { result, lhs, rhs } => {
-                    self.execute_i64_add(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Clz { result, input } => self.execute_i64_clz(result, input),
+                Instr::I64Ctz { result, input } => self.execute_i64_ctz(result, input),
+                Instr::I64Popcnt { result, input } => self.execute_i64_popcnt(result, input),
+                Instr::I64Add { result, lhs, rhs } => self.execute_i64_add(result, lhs, rhs),
                 Instr::I64AddImm16 { result, lhs, rhs } => {
-                    self.execute_i64_add_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_add_imm16(result, lhs, rhs)
                 }
-                Instr::I64Sub { result, lhs, rhs } => {
-                    self.execute_i64_sub(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Sub { result, lhs, rhs } => self.execute_i64_sub(result, lhs, rhs),
                 Instr::I64SubImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i64_sub_imm16_lhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_sub_imm16_lhs(result, lhs, rhs)
                 }
-                Instr::I64Mul { result, lhs, rhs } => {
-                    self.execute_i64_mul(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Mul { result, lhs, rhs } => self.execute_i64_mul(result, lhs, rhs),
                 Instr::I64MulImm16 { result, lhs, rhs } => {
-                    self.execute_i64_mul_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_mul_imm16(result, lhs, rhs)
                 }
-                Instr::I64DivS { result, lhs, rhs } => {
-                    self.execute_i64_div_s(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I64DivS { result, lhs, rhs } => self.execute_i64_div_s(result, lhs, rhs)?,
                 Instr::I64DivSImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i64_div_s_imm16_rhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_div_s_imm16_rhs(result, lhs, rhs)?
                 }
                 Instr::I64DivSImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i64_div_s_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_div_s_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I64DivU { result, lhs, rhs } => {
-                    self.execute_i64_div_u(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I64DivU { result, lhs, rhs } => self.execute_i64_div_u(result, lhs, rhs)?,
                 Instr::I64DivUImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i64_div_u_imm16_rhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_div_u_imm16_rhs(result, lhs, rhs)
                 }
                 Instr::I64DivUImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i64_div_u_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_div_u_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I64RemS { result, lhs, rhs } => {
-                    self.execute_i64_rem_s(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I64RemS { result, lhs, rhs } => self.execute_i64_rem_s(result, lhs, rhs)?,
                 Instr::I64RemSImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i64_rem_s_imm16_rhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_rem_s_imm16_rhs(result, lhs, rhs)?
                 }
                 Instr::I64RemSImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i64_rem_s_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_rem_s_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I64RemU { result, lhs, rhs } => {
-                    self.execute_i64_rem_u(&mut store.inner, result, lhs, rhs)?
-                }
+                Instr::I64RemU { result, lhs, rhs } => self.execute_i64_rem_u(result, lhs, rhs)?,
                 Instr::I64RemUImm16Rhs { result, lhs, rhs } => {
-                    self.execute_i64_rem_u_imm16_rhs(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_rem_u_imm16_rhs(result, lhs, rhs)
                 }
                 Instr::I64RemUImm16Lhs { result, lhs, rhs } => {
-                    self.execute_i64_rem_u_imm16_lhs(&mut store.inner, result, lhs, rhs)?
+                    self.execute_i64_rem_u_imm16_lhs(result, lhs, rhs)?
                 }
-                Instr::I64And { result, lhs, rhs } => {
-                    self.execute_i64_and(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64And { result, lhs, rhs } => self.execute_i64_and(result, lhs, rhs),
                 Instr::I64AndImm16 { result, lhs, rhs } => {
-                    self.execute_i64_and_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_and_imm16(result, lhs, rhs)
                 }
-                Instr::I64Or { result, lhs, rhs } => {
-                    self.execute_i64_or(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Or { result, lhs, rhs } => self.execute_i64_or(result, lhs, rhs),
                 Instr::I64OrImm16 { result, lhs, rhs } => {
-                    self.execute_i64_or_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_or_imm16(result, lhs, rhs)
                 }
-                Instr::I64Xor { result, lhs, rhs } => {
-                    self.execute_i64_xor(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Xor { result, lhs, rhs } => self.execute_i64_xor(result, lhs, rhs),
                 Instr::I64XorImm16 { result, lhs, rhs } => {
-                    self.execute_i64_xor_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_xor_imm16(result, lhs, rhs)
                 }
-                Instr::I64Shl { result, lhs, rhs } => {
-                    self.execute_i64_shl(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I64ShlBy { result, lhs, rhs } => {
-                    self.execute_i64_shl_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Shl { result, lhs, rhs } => self.execute_i64_shl(result, lhs, rhs),
+                Instr::I64ShlBy { result, lhs, rhs } => self.execute_i64_shl_by(result, lhs, rhs),
                 Instr::I64ShlImm16 { result, lhs, rhs } => {
-                    self.execute_i64_shl_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_shl_imm16(result, lhs, rhs)
                 }
-                Instr::I64ShrU { result, lhs, rhs } => {
-                    self.execute_i64_shr_u(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64ShrU { result, lhs, rhs } => self.execute_i64_shr_u(result, lhs, rhs),
                 Instr::I64ShrUBy { result, lhs, rhs } => {
-                    self.execute_i64_shr_u_by(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_shr_u_by(result, lhs, rhs)
                 }
                 Instr::I64ShrUImm16 { result, lhs, rhs } => {
-                    self.execute_i64_shr_u_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_shr_u_imm16(result, lhs, rhs)
                 }
-                Instr::I64ShrS { result, lhs, rhs } => {
-                    self.execute_i64_shr_s(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64ShrS { result, lhs, rhs } => self.execute_i64_shr_s(result, lhs, rhs),
                 Instr::I64ShrSBy { result, lhs, rhs } => {
-                    self.execute_i64_shr_s_by(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_shr_s_by(result, lhs, rhs)
                 }
                 Instr::I64ShrSImm16 { result, lhs, rhs } => {
-                    self.execute_i64_shr_s_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_shr_s_imm16(result, lhs, rhs)
                 }
-                Instr::I64Rotl { result, lhs, rhs } => {
-                    self.execute_i64_rotl(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I64RotlBy { result, lhs, rhs } => {
-                    self.execute_i64_rotl_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Rotl { result, lhs, rhs } => self.execute_i64_rotl(result, lhs, rhs),
+                Instr::I64RotlBy { result, lhs, rhs } => self.execute_i64_rotl_by(result, lhs, rhs),
                 Instr::I64RotlImm16 { result, lhs, rhs } => {
-                    self.execute_i64_rotl_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_rotl_imm16(result, lhs, rhs)
                 }
-                Instr::I64Rotr { result, lhs, rhs } => {
-                    self.execute_i64_rotr(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::I64RotrBy { result, lhs, rhs } => {
-                    self.execute_i64_rotr_by(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I64Rotr { result, lhs, rhs } => self.execute_i64_rotr(result, lhs, rhs),
+                Instr::I64RotrBy { result, lhs, rhs } => self.execute_i64_rotr_by(result, lhs, rhs),
                 Instr::I64RotrImm16 { result, lhs, rhs } => {
-                    self.execute_i64_rotr_imm16(&mut store.inner, result, lhs, rhs)
+                    self.execute_i64_rotr_imm16(result, lhs, rhs)
                 }
-                Instr::I32WrapI64 { result, input } => {
-                    self.execute_i32_wrap_i64(&mut store.inner, result, input)
-                }
-                Instr::I32Extend8S { result, input } => {
-                    self.execute_i32_extend8_s(&mut store.inner, result, input)
-                }
-                Instr::I32Extend16S { result, input } => {
-                    self.execute_i32_extend16_s(&mut store.inner, result, input)
-                }
-                Instr::I64Extend8S { result, input } => {
-                    self.execute_i64_extend8_s(&mut store.inner, result, input)
-                }
-                Instr::I64Extend16S { result, input } => {
-                    self.execute_i64_extend16_s(&mut store.inner, result, input)
-                }
-                Instr::I64Extend32S { result, input } => {
-                    self.execute_i64_extend32_s(&mut store.inner, result, input)
-                }
-                Instr::F32Abs { result, input } => {
-                    self.execute_f32_abs(&mut store.inner, result, input)
-                }
-                Instr::F32Neg { result, input } => {
-                    self.execute_f32_neg(&mut store.inner, result, input)
-                }
-                Instr::F32Ceil { result, input } => {
-                    self.execute_f32_ceil(&mut store.inner, result, input)
-                }
-                Instr::F32Floor { result, input } => {
-                    self.execute_f32_floor(&mut store.inner, result, input)
-                }
-                Instr::F32Trunc { result, input } => {
-                    self.execute_f32_trunc(&mut store.inner, result, input)
-                }
-                Instr::F32Nearest { result, input } => {
-                    self.execute_f32_nearest(&mut store.inner, result, input)
-                }
-                Instr::F32Sqrt { result, input } => {
-                    self.execute_f32_sqrt(&mut store.inner, result, input)
-                }
-                Instr::F32Add { result, lhs, rhs } => {
-                    self.execute_f32_add(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Sub { result, lhs, rhs } => {
-                    self.execute_f32_sub(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Mul { result, lhs, rhs } => {
-                    self.execute_f32_mul(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Div { result, lhs, rhs } => {
-                    self.execute_f32_div(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Min { result, lhs, rhs } => {
-                    self.execute_f32_min(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F32Max { result, lhs, rhs } => {
-                    self.execute_f32_max(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::I32WrapI64 { result, input } => self.execute_i32_wrap_i64(result, input),
+                Instr::I32Extend8S { result, input } => self.execute_i32_extend8_s(result, input),
+                Instr::I32Extend16S { result, input } => self.execute_i32_extend16_s(result, input),
+                Instr::I64Extend8S { result, input } => self.execute_i64_extend8_s(result, input),
+                Instr::I64Extend16S { result, input } => self.execute_i64_extend16_s(result, input),
+                Instr::I64Extend32S { result, input } => self.execute_i64_extend32_s(result, input),
+                Instr::F32Abs { result, input } => self.execute_f32_abs(result, input),
+                Instr::F32Neg { result, input } => self.execute_f32_neg(result, input),
+                Instr::F32Ceil { result, input } => self.execute_f32_ceil(result, input),
+                Instr::F32Floor { result, input } => self.execute_f32_floor(result, input),
+                Instr::F32Trunc { result, input } => self.execute_f32_trunc(result, input),
+                Instr::F32Nearest { result, input } => self.execute_f32_nearest(result, input),
+                Instr::F32Sqrt { result, input } => self.execute_f32_sqrt(result, input),
+                Instr::F32Add { result, lhs, rhs } => self.execute_f32_add(result, lhs, rhs),
+                Instr::F32Sub { result, lhs, rhs } => self.execute_f32_sub(result, lhs, rhs),
+                Instr::F32Mul { result, lhs, rhs } => self.execute_f32_mul(result, lhs, rhs),
+                Instr::F32Div { result, lhs, rhs } => self.execute_f32_div(result, lhs, rhs),
+                Instr::F32Min { result, lhs, rhs } => self.execute_f32_min(result, lhs, rhs),
+                Instr::F32Max { result, lhs, rhs } => self.execute_f32_max(result, lhs, rhs),
                 Instr::F32Copysign { result, lhs, rhs } => {
-                    self.execute_f32_copysign(&mut store.inner, result, lhs, rhs)
+                    self.execute_f32_copysign(result, lhs, rhs)
                 }
                 Instr::F32CopysignImm { result, lhs, rhs } => {
-                    self.execute_f32_copysign_imm(&mut store.inner, result, lhs, rhs)
+                    self.execute_f32_copysign_imm(result, lhs, rhs)
                 }
-                Instr::F64Abs { result, input } => {
-                    self.execute_f64_abs(&mut store.inner, result, input)
-                }
-                Instr::F64Neg { result, input } => {
-                    self.execute_f64_neg(&mut store.inner, result, input)
-                }
-                Instr::F64Ceil { result, input } => {
-                    self.execute_f64_ceil(&mut store.inner, result, input)
-                }
-                Instr::F64Floor { result, input } => {
-                    self.execute_f64_floor(&mut store.inner, result, input)
-                }
-                Instr::F64Trunc { result, input } => {
-                    self.execute_f64_trunc(&mut store.inner, result, input)
-                }
-                Instr::F64Nearest { result, input } => {
-                    self.execute_f64_nearest(&mut store.inner, result, input)
-                }
-                Instr::F64Sqrt { result, input } => {
-                    self.execute_f64_sqrt(&mut store.inner, result, input)
-                }
-                Instr::F64Add { result, lhs, rhs } => {
-                    self.execute_f64_add(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Sub { result, lhs, rhs } => {
-                    self.execute_f64_sub(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Mul { result, lhs, rhs } => {
-                    self.execute_f64_mul(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Div { result, lhs, rhs } => {
-                    self.execute_f64_div(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Min { result, lhs, rhs } => {
-                    self.execute_f64_min(&mut store.inner, result, lhs, rhs)
-                }
-                Instr::F64Max { result, lhs, rhs } => {
-                    self.execute_f64_max(&mut store.inner, result, lhs, rhs)
-                }
+                Instr::F64Abs { result, input } => self.execute_f64_abs(result, input),
+                Instr::F64Neg { result, input } => self.execute_f64_neg(result, input),
+                Instr::F64Ceil { result, input } => self.execute_f64_ceil(result, input),
+                Instr::F64Floor { result, input } => self.execute_f64_floor(result, input),
+                Instr::F64Trunc { result, input } => self.execute_f64_trunc(result, input),
+                Instr::F64Nearest { result, input } => self.execute_f64_nearest(result, input),
+                Instr::F64Sqrt { result, input } => self.execute_f64_sqrt(result, input),
+                Instr::F64Add { result, lhs, rhs } => self.execute_f64_add(result, lhs, rhs),
+                Instr::F64Sub { result, lhs, rhs } => self.execute_f64_sub(result, lhs, rhs),
+                Instr::F64Mul { result, lhs, rhs } => self.execute_f64_mul(result, lhs, rhs),
+                Instr::F64Div { result, lhs, rhs } => self.execute_f64_div(result, lhs, rhs),
+                Instr::F64Min { result, lhs, rhs } => self.execute_f64_min(result, lhs, rhs),
+                Instr::F64Max { result, lhs, rhs } => self.execute_f64_max(result, lhs, rhs),
                 Instr::F64Copysign { result, lhs, rhs } => {
-                    self.execute_f64_copysign(&mut store.inner, result, lhs, rhs)
+                    self.execute_f64_copysign(result, lhs, rhs)
                 }
                 Instr::F64CopysignImm { result, lhs, rhs } => {
-                    self.execute_f64_copysign_imm(&mut store.inner, result, lhs, rhs)
+                    self.execute_f64_copysign_imm(result, lhs, rhs)
                 }
                 Instr::I32TruncF32S { result, input } => {
-                    self.execute_i32_trunc_f32_s(&mut store.inner, result, input)?
+                    self.execute_i32_trunc_f32_s(result, input)?
                 }
                 Instr::I32TruncF32U { result, input } => {
-                    self.execute_i32_trunc_f32_u(&mut store.inner, result, input)?
+                    self.execute_i32_trunc_f32_u(result, input)?
                 }
                 Instr::I32TruncF64S { result, input } => {
-                    self.execute_i32_trunc_f64_s(&mut store.inner, result, input)?
+                    self.execute_i32_trunc_f64_s(result, input)?
                 }
                 Instr::I32TruncF64U { result, input } => {
-                    self.execute_i32_trunc_f64_u(&mut store.inner, result, input)?
+                    self.execute_i32_trunc_f64_u(result, input)?
                 }
                 Instr::I64TruncF32S { result, input } => {
-                    self.execute_i64_trunc_f32_s(&mut store.inner, result, input)?
+                    self.execute_i64_trunc_f32_s(result, input)?
                 }
                 Instr::I64TruncF32U { result, input } => {
-                    self.execute_i64_trunc_f32_u(&mut store.inner, result, input)?
+                    self.execute_i64_trunc_f32_u(result, input)?
                 }
                 Instr::I64TruncF64S { result, input } => {
-                    self.execute_i64_trunc_f64_s(&mut store.inner, result, input)?
+                    self.execute_i64_trunc_f64_s(result, input)?
                 }
                 Instr::I64TruncF64U { result, input } => {
-                    self.execute_i64_trunc_f64_u(&mut store.inner, result, input)?
+                    self.execute_i64_trunc_f64_u(result, input)?
                 }
                 Instr::I32TruncSatF32S { result, input } => {
-                    self.execute_i32_trunc_sat_f32_s(&mut store.inner, result, input)
+                    self.execute_i32_trunc_sat_f32_s(result, input)
                 }
                 Instr::I32TruncSatF32U { result, input } => {
-                    self.execute_i32_trunc_sat_f32_u(&mut store.inner, result, input)
+                    self.execute_i32_trunc_sat_f32_u(result, input)
                 }
                 Instr::I32TruncSatF64S { result, input } => {
-                    self.execute_i32_trunc_sat_f64_s(&mut store.inner, result, input)
+                    self.execute_i32_trunc_sat_f64_s(result, input)
                 }
                 Instr::I32TruncSatF64U { result, input } => {
-                    self.execute_i32_trunc_sat_f64_u(&mut store.inner, result, input)
+                    self.execute_i32_trunc_sat_f64_u(result, input)
                 }
                 Instr::I64TruncSatF32S { result, input } => {
-                    self.execute_i64_trunc_sat_f32_s(&mut store.inner, result, input)
+                    self.execute_i64_trunc_sat_f32_s(result, input)
                 }
                 Instr::I64TruncSatF32U { result, input } => {
-                    self.execute_i64_trunc_sat_f32_u(&mut store.inner, result, input)
+                    self.execute_i64_trunc_sat_f32_u(result, input)
                 }
                 Instr::I64TruncSatF64S { result, input } => {
-                    self.execute_i64_trunc_sat_f64_s(&mut store.inner, result, input)
+                    self.execute_i64_trunc_sat_f64_s(result, input)
                 }
                 Instr::I64TruncSatF64U { result, input } => {
-                    self.execute_i64_trunc_sat_f64_u(&mut store.inner, result, input)
+                    self.execute_i64_trunc_sat_f64_u(result, input)
                 }
-                Instr::F32DemoteF64 { result, input } => {
-                    self.execute_f32_demote_f64(&mut store.inner, result, input)
-                }
+                Instr::F32DemoteF64 { result, input } => self.execute_f32_demote_f64(result, input),
                 Instr::F64PromoteF32 { result, input } => {
-                    self.execute_f64_promote_f32(&mut store.inner, result, input)
+                    self.execute_f64_promote_f32(result, input)
                 }
                 Instr::F32ConvertI32S { result, input } => {
-                    self.execute_f32_convert_i32_s(&mut store.inner, result, input)
+                    self.execute_f32_convert_i32_s(result, input)
                 }
                 Instr::F32ConvertI32U { result, input } => {
-                    self.execute_f32_convert_i32_u(&mut store.inner, result, input)
+                    self.execute_f32_convert_i32_u(result, input)
                 }
                 Instr::F32ConvertI64S { result, input } => {
-                    self.execute_f32_convert_i64_s(&mut store.inner, result, input)
+                    self.execute_f32_convert_i64_s(result, input)
                 }
                 Instr::F32ConvertI64U { result, input } => {
-                    self.execute_f32_convert_i64_u(&mut store.inner, result, input)
+                    self.execute_f32_convert_i64_u(result, input)
                 }
                 Instr::F64ConvertI32S { result, input } => {
-                    self.execute_f64_convert_i32_s(&mut store.inner, result, input)
+                    self.execute_f64_convert_i32_s(result, input)
                 }
                 Instr::F64ConvertI32U { result, input } => {
-                    self.execute_f64_convert_i32_u(&mut store.inner, result, input)
+                    self.execute_f64_convert_i32_u(result, input)
                 }
                 Instr::F64ConvertI64S { result, input } => {
-                    self.execute_f64_convert_i64_s(&mut store.inner, result, input)
+                    self.execute_f64_convert_i64_s(result, input)
                 }
                 Instr::F64ConvertI64U { result, input } => {
-                    self.execute_f64_convert_i64_u(&mut store.inner, result, input)
+                    self.execute_f64_convert_i64_u(result, input)
                 }
                 Instr::TableGet { result, index } => {
                     self.execute_table_get(&store.inner, result, index)?
@@ -2187,15 +1967,8 @@ impl Executor<'_> {
 
     /// Executes a generic unary [`Instruction`].
     #[inline(always)]
-    fn execute_unary(
-        &mut self,
-        store: &mut StoreInner,
-        result: Reg,
-        input: Reg,
-        op: fn(UntypedVal) -> UntypedVal,
-    ) {
+    fn execute_unary(&mut self, result: Reg, input: Reg, op: fn(UntypedVal) -> UntypedVal) {
         let value = self.get_register(input);
-        store.update_runtime_signature(value.to_bits());
         self.set_register(result, op(value));
         self.next_instr();
     }
@@ -2204,13 +1977,11 @@ impl Executor<'_> {
     #[inline(always)]
     fn try_execute_unary(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         input: Reg,
         op: fn(UntypedVal) -> Result<UntypedVal, TrapCode>,
     ) -> Result<(), Error> {
         let value = self.get_register(input);
-        store.update_runtime_signature(value.to_bits());
         self.set_register(result, op(value)?);
         self.try_next_instr()
     }
@@ -2219,7 +1990,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn execute_binary(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Reg,
@@ -2227,8 +1997,6 @@ impl Executor<'_> {
     ) {
         let lhs = self.get_register(lhs);
         let rhs = self.get_register(rhs);
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
@@ -2237,7 +2005,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn execute_binary_imm16<T>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Const16<T>,
@@ -2248,8 +2015,6 @@ impl Executor<'_> {
     {
         let lhs = self.get_register(lhs);
         let rhs = UntypedVal::from(<T>::from(rhs));
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
@@ -2258,7 +2023,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn execute_binary_imm16_lhs<T>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Const16<T>,
         rhs: Reg,
@@ -2269,8 +2033,6 @@ impl Executor<'_> {
     {
         let lhs = UntypedVal::from(<T>::from(lhs));
         let rhs = self.get_register(rhs);
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
@@ -2279,7 +2041,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn execute_shift_by<T>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: ShiftAmount<T>,
@@ -2290,8 +2051,6 @@ impl Executor<'_> {
     {
         let lhs = self.get_register(lhs);
         let rhs = UntypedVal::from(<T>::from(rhs));
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
@@ -2300,7 +2059,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn try_execute_binary(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Reg,
@@ -2308,8 +2066,6 @@ impl Executor<'_> {
     ) -> Result<(), Error> {
         let lhs = self.get_register(lhs);
         let rhs = self.get_register(rhs);
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }
@@ -2318,7 +2074,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn try_execute_divrem_imm16_rhs<NonZeroT>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Const16<NonZeroT>,
@@ -2329,7 +2084,6 @@ impl Executor<'_> {
     {
         let lhs = self.get_register(lhs);
         let rhs = <NonZeroT>::from(rhs);
-        store.update_runtime_signature(lhs.to_bits());
         self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }
@@ -2338,7 +2092,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn execute_divrem_imm16_rhs<NonZeroT>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Const16<NonZeroT>,
@@ -2348,7 +2101,6 @@ impl Executor<'_> {
     {
         let lhs = self.get_register(lhs);
         let rhs = <NonZeroT>::from(rhs);
-        store.update_runtime_signature(lhs.to_bits());
         self.set_register(result, op(lhs, rhs));
         self.next_instr()
     }
@@ -2357,7 +2109,6 @@ impl Executor<'_> {
     #[inline(always)]
     fn try_execute_binary_imm16_lhs<T>(
         &mut self,
-        store: &mut StoreInner,
         result: Reg,
         lhs: Const16<T>,
         rhs: Reg,
@@ -2369,8 +2120,6 @@ impl Executor<'_> {
     {
         let lhs = UntypedVal::from(<T>::from(lhs));
         let rhs = self.get_register(rhs);
-        store.update_runtime_signature(lhs.to_bits());
-        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }

@@ -2,7 +2,6 @@ use super::Executor;
 use crate::{
     core::UntypedVal,
     engine::bytecode::{Const16, Reg},
-    store::StoreInner,
 };
 
 #[cfg(doc)]
@@ -12,8 +11,8 @@ macro_rules! impl_comparison {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Reg) {
-                self.execute_binary(store, result, lhs, rhs, $op)
+            pub fn $fn_name(&mut self, result: Reg, lhs: Reg, rhs: Reg) {
+                self.execute_binary(result, lhs, rhs, $op)
             }
         )*
     };
@@ -63,8 +62,8 @@ macro_rules! impl_comparison_imm16 {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
-                self.execute_binary_imm16(store, result, lhs, rhs, $op)
+            pub fn $fn_name(&mut self, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
+                self.execute_binary_imm16(result, lhs, rhs, $op)
             }
         )*
     };
