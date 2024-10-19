@@ -1049,6 +1049,10 @@ impl<T> Store<T> {
         self.inner.get_runtime_signature_arr()
     }
 
+    pub fn set_fuel_per_signature(&mut self, fuel_per_signature: u64) {
+        self.inner.set_fuel_per_signature(fuel_per_signature);
+    }
+
     pub fn update_runtime_signature(&mut self, value: u64) {
         self.inner.update_runtime_signature(value);
     }
