@@ -12,7 +12,7 @@ macro_rules! impl_comparison {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Reg) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Reg) {
                 self.execute_binary(store, result, lhs, rhs, $op)
             }
         )*
@@ -63,7 +63,7 @@ macro_rules! impl_comparison_imm16 {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
                 self.execute_binary_imm16(store, result, lhs, rhs, $op)
             }
         )*

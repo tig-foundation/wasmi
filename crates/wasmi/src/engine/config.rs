@@ -43,8 +43,6 @@ pub struct Config {
     fuel_costs: FuelCosts,
     /// The mode of Wasm to Wasmi bytecode compilation.
     compilation_mode: CompilationMode,
-    /// Is `true` if Wasmi executions shall generate a runtime signature.
-    update_runtime_signature: bool,
     /// Enforced limits for Wasm module parsing and compilation.
     limits: EnforcedLimits,
 }
@@ -190,7 +188,6 @@ impl Default for Config {
             ignore_custom_sections: false,
             fuel_costs: FuelCosts::default(),
             compilation_mode: CompilationMode::default(),
-            update_runtime_signature: false,
             limits: EnforcedLimits::default(),
         }
     }
@@ -367,15 +364,6 @@ impl Config {
     /// [`Engine`]: crate::Engine
     pub(crate) fn get_consume_fuel(&self) -> bool {
         self.consume_fuel
-    }
-
-    pub fn update_runtime_signature(&mut self, enable: bool) -> &mut Self {
-        self.update_runtime_signature = enable;
-        self
-    }
-
-    pub(crate) fn get_update_runtime_signature(&self) -> bool {
-        self.update_runtime_signature
     }
 
     /// Configures whether Wasmi will ignore custom sections when parsing Wasm modules.

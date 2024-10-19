@@ -15,7 +15,7 @@ macro_rules! impl_binary {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Reg) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Reg) {
                 self.execute_binary(store, result, lhs, rhs, $op)
             }
         )*
@@ -74,7 +74,7 @@ macro_rules! impl_binary_imm16 {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
                 self.execute_binary_imm16(store, result, lhs, rhs, $op)
             }
         )*
@@ -103,7 +103,7 @@ macro_rules! impl_shift_by {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: ShiftAmount<$ty>) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: ShiftAmount<$ty>) {
                 self.execute_shift_by(store, result, lhs, rhs, $op)
             }
         )*
@@ -130,7 +130,7 @@ macro_rules! impl_binary_imm16_lhs {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Const16<$ty>, rhs: Reg) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Const16<$ty>, rhs: Reg) {
                 self.execute_binary_imm16_lhs(store, result, lhs, rhs, $op)
             }
         )*
@@ -159,7 +159,7 @@ macro_rules! impl_fallible_binary {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Reg) -> Result<(), Error> {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Reg) -> Result<(), Error> {
                 self.try_execute_binary(store, result, lhs, rhs, $op).map_err(Into::into)
             }
         )*
@@ -250,7 +250,7 @@ macro_rules! impl_divrem_s_imm16_rhs {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Const16<$ty>) -> Result<(), Error> {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Const16<$ty>) -> Result<(), Error> {
                 self.try_execute_divrem_imm16_rhs(store, result, lhs, rhs, $op)
             }
         )*
@@ -270,7 +270,7 @@ macro_rules! impl_divrem_u_imm16_rhs {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Reg, rhs: Const16<$ty>) {
                 self.execute_divrem_imm16_rhs(store, result, lhs, rhs, $op)
             }
         )*
@@ -290,7 +290,7 @@ macro_rules! impl_fallible_binary_imm16_lhs {
     ( $( ($ty:ty, Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, lhs: Const16<$ty>, rhs: Reg) -> Result<(), Error> {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, lhs: Const16<$ty>, rhs: Reg) -> Result<(), Error> {
                 self.try_execute_binary_imm16_lhs(store, result, lhs, rhs, $op).map_err(Into::into)
             }
         )*
@@ -314,17 +314,15 @@ impl Executor<'_> {
     /// Executes an [`Instruction::F32CopysignImm`].
     pub fn execute_f32_copysign_imm(
         &mut self,
-        store: Option<&mut StoreInner>,
+        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Sign<f32>,
     ) {
         let lhs = self.get_register(lhs);
         let rhs = UntypedVal::from(f32::from(rhs));
-        if let Some(store) = store {
-            self.update_runtime_signature(store, lhs.to_bits());
-            self.update_runtime_signature(store, rhs.to_bits());
-        }
+        store.update_runtime_signature(lhs.to_bits());
+        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, UntypedVal::f32_copysign(lhs, rhs));
         self.next_instr()
     }
@@ -332,17 +330,15 @@ impl Executor<'_> {
     /// Executes an [`Instruction::F64CopysignImm`].
     pub fn execute_f64_copysign_imm(
         &mut self,
-        store: Option<&mut StoreInner>,
+        store: &mut StoreInner,
         result: Reg,
         lhs: Reg,
         rhs: Sign<f64>,
     ) {
         let lhs = self.get_register(lhs);
         let rhs = f64::from(rhs);
-        if let Some(store) = store {
-            self.update_runtime_signature(store, lhs.to_bits());
-            self.update_runtime_signature(store, rhs.to_bits());
-        }
+        store.update_runtime_signature(lhs.to_bits());
+        store.update_runtime_signature(rhs.to_bits());
         self.set_register(result, UntypedVal::f64_copysign(lhs, rhs.into()));
         self.next_instr()
     }

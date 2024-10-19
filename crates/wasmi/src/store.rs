@@ -16,7 +16,7 @@ use core::{
     fmt::{self, Debug},
     sync::atomic::{AtomicU32, Ordering},
 };
-use std::boxed::Box;
+use std::{boxed::Box, vec, vec::Vec};
 
 /// A unique store index.
 ///
@@ -149,7 +149,9 @@ pub struct StoreInner {
     /// The fuel of the [`Store`].
     fuel: Fuel,
     /// The runtime_signature of the [`Store`].
-    runtime_signature: u64,
+    runtime_signature: Vec<(u64, u64)>,
+    /// Add a new signature when this much fuel is consumed.
+    fuel_per_signature: u64,
 }
 
 #[test]
@@ -362,7 +364,8 @@ impl StoreInner {
             elems: Arena::new(),
             extern_objects: Arena::new(),
             fuel,
-            runtime_signature: 0x97b69fcae66984bf,
+            runtime_signature: vec![(0, 0x97b69fcae66984bf)],
+            fuel_per_signature: 100_000_000,
         }
     }
 
@@ -374,6 +377,15 @@ impl StoreInner {
     /// Returns an exclusive reference to the [`Fuel`] counters.
     pub fn fuel_mut(&mut self) -> &mut Fuel {
         &mut self.fuel
+    }
+
+    pub fn set_fuel(&mut self, fuel: u64) -> Result<(), FuelError> {
+        self.runtime_signature.last_mut().unwrap().0 = fuel;
+        self.fuel.set_fuel(fuel)
+    }
+
+    pub fn get_fuel(&self) -> Result<u64, FuelError> {
+        self.fuel.get_fuel()
     }
 
     /// Wraps an entity `Idx` (index type) as a [`Stored<Idx>`] type.
@@ -840,12 +852,25 @@ impl StoreInner {
         })
     }
 
-    pub fn get_runtime_signature(&self) -> u64 {
-        self.runtime_signature
+    pub fn get_runtime_signature(&self) -> &Vec<(u64, u64)> {
+        &self.runtime_signature
     }
 
-    pub fn set_runtime_signature(&mut self, runtime_signature: u64) {
-        self.runtime_signature = runtime_signature;
+    pub fn set_fuel_per_signature(&mut self, fuel_per_signature: u64) {
+        self.fuel_per_signature = fuel_per_signature;
+    }
+
+    pub fn update_runtime_signature(&mut self, value: u64) {
+        let sig_data = self.runtime_signature.last().unwrap();
+        if sig_data.0 - self.fuel.remaining >= self.fuel_per_signature {
+            self.runtime_signature
+                .push((self.fuel.remaining, sig_data.1));
+        }
+        let runtime_signature = &mut self.runtime_signature.last_mut().unwrap().1;
+        *runtime_signature ^= value;
+        *runtime_signature ^= *runtime_signature >> 27;
+        *runtime_signature ^= *runtime_signature << 23;
+        *runtime_signature = runtime_signature.wrapping_mul(0xdfd951778ea84a0f);
     }
 }
 
@@ -966,7 +991,7 @@ impl<T> Store<T> {
     ///
     /// If fuel metering is disabled.
     pub fn get_fuel(&self) -> Result<u64, Error> {
-        self.inner.fuel.get_fuel().map_err(Into::into)
+        self.inner.get_fuel().map_err(Into::into)
     }
 
     /// Sets the remaining fuel of the [`Store`] to `value` if fuel metering is enabled.
@@ -979,7 +1004,7 @@ impl<T> Store<T> {
     ///
     /// If fuel metering is disabled.
     pub fn set_fuel(&mut self, fuel: u64) -> Result<(), Error> {
-        self.inner.fuel.set_fuel(fuel).map_err(Into::into)
+        self.inner.set_fuel(fuel).map_err(Into::into)
     }
 
     /// Allocates a new [`TrampolineEntity`] and returns a [`Trampoline`] reference to it.
@@ -1020,12 +1045,12 @@ impl<T> Store<T> {
             .unwrap_or_else(|| panic!("failed to resolve stored host function: {entity_index:?}"))
     }
 
-    pub fn get_runtime_signature(&self) -> u64 {
+    pub fn get_runtime_signature(&self) -> &Vec<(u64, u64)> {
         self.inner.get_runtime_signature()
     }
 
-    pub fn set_runtime_signature(&mut self, runtime_signature: u64) {
-        self.inner.set_runtime_signature(runtime_signature);
+    pub fn update_runtime_signature(&mut self, value: u64) {
+        self.inner.update_runtime_signature(value);
     }
 
     /// Sets a callback function that is executed whenever a WebAssembly

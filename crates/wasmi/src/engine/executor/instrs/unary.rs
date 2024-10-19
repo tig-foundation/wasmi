@@ -8,7 +8,7 @@ macro_rules! impl_unary_impls {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, input: Reg) {
+            pub fn $fn_name(&mut self, store: &mut StoreInner, result: Reg, input: Reg) {
                 self.execute_unary(store, result, input, $op)
             }
         )*
