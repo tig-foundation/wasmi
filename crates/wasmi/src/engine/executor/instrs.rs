@@ -1,20 +1,16 @@
 pub use self::call::{dispatch_host_func, ResumableHostError};
-use self::return_::ReturnOutcome;
-use super::{cache::CachedInstance, Stack};
+use super::{cache::CachedInstance, InstructionPtr, Stack};
 use crate::{
-    core::{TrapCode, UntypedVal},
+    core::{hint, TrapCode, UntypedVal},
     engine::{
-        bytecode::{
-            AnyConst32, BinInstr, BinInstrImm16, BlockFuel, Const16, DataSegmentIdx,
-            ElementSegmentIdx, FuncIdx, GlobalIdx, Instruction, InstructionPtr, Register,
-            SignatureIdx, TableIdx, UnaryInstr,
-        },
+        bytecode::{index, BlockFuel, Const16, Instruction, Reg},
         code_map::CodeMap,
         executor::stack::{CallFrame, FrameRegisters, ValueStack},
-        DedupFuncType,
+        utils::unreachable_unchecked,
+        DedupFuncType, EngineFunc,
     },
+    ir::ShiftAmount,
     memory::DataSegment,
-    module::DEFAULT_MEMORY_INDEX,
     store::StoreInner,
     table::ElementSegment,
     Error, Func, FuncRef, Global, Memory, Store, Table,
@@ -40,21 +36,17 @@ mod unary;
 
 macro_rules! forward_return {
     ($expr:expr) => {{
-        if let ReturnOutcome::Host = $expr {
+        if hint::unlikely($expr.is_break()) {
             return Ok(());
         }
     }};
 }
 
-/// Executes compiled function instructions until either
-///
-/// - returning from the root function
-/// - calling a host function
-/// - encountering a trap
+/// Executes compiled function instructions until execution returns from the root function.
 ///
 /// # Errors
 ///
-/// If the execution traps.
+/// If the execution encounters a trap.
 #[inline(never)]
 pub fn execute_instrs<'engine, T>(
     store: &mut Store<T>,
@@ -121,20 +113,17 @@ impl<'engine> Executor<'engine> {
                 // update the runtime signature with the current instruction
                 // we map the instruction to a unique 64-bit prime number
                 let instr_prime = match instr {
-                    Instr::TableIdx(_) => 0xf360371a61b48ca1,
-                    Instr::DataSegmentIdx(_) => 0xce5750f577a4a9bd,
-                    Instr::ElementSegmentIdx(_) => 0xdb013c4da009cbe9,
-                    Instr::Const32(_) => 0xe3a461c24c1edf67,
-                    Instr::I64Const32(_) => 0x93e0632ef59fbf8d,
-                    Instr::F64Const32(_) => 0xcf96777f6bf48827,
-                    Instr::Register(_) => 0xa1a9bcb9fec5fdfb,
-                    Instr::Register2(_) => 0xbee08b06e6ab17f5,
-                    Instr::Register3(_) => 0xb448b4a7d84f751f,
-                    Instr::RegisterList(_) => 0xb918e0472d8c224f,
-                    Instr::CallIndirectParams(_) => 0xbf382b4acfe7644b,
-                    Instr::CallIndirectParamsImm16(_) => 0xd853e6a184c25f0d,
-                    Instr::Trap(_) => 0xb18d650b9f5998a7,
-                    Instr::ConsumeFuel(_) => 0xe6118441cda42713,
+                    Instr::Const32 { .. } => 0xe3a461c24c1edf67,
+                    Instr::I64Const32 { .. } => 0x93e0632ef59fbf8d,
+                    Instr::F64Const32 { .. } => 0xcf96777f6bf48827,
+                    Instr::Register { .. } => 0xa1a9bcb9fec5fdfb,
+                    Instr::Register2 { .. } => 0xbee08b06e6ab17f5,
+                    Instr::Register3 { .. } => 0xb448b4a7d84f751f,
+                    Instr::RegisterList { .. } => 0xb918e0472d8c224f,
+                    Instr::CallIndirectParams { .. } => 0xbf382b4acfe7644b,
+                    Instr::CallIndirectParamsImm16 { .. } => 0xd853e6a184c25f0d,
+                    Instr::Trap { .. } => 0xb18d650b9f5998a7,
+                    Instr::ConsumeFuel { .. } => 0xe6118441cda42713,
                     Instr::Return => 0xc8b8b1c1bcbd90e5,
                     Instr::ReturnReg { .. } => 0xbaab8e9341e08dbf,
                     Instr::ReturnReg2 { .. } => 0xa73d1157b48ca275,
@@ -154,71 +143,70 @@ impl<'engine> Executor<'engine> {
                     Instr::ReturnNezMany { .. } => 0xc6cdd0d8f17fe649,
                     Instr::Branch { .. } => 0xef66bf425478625b,
                     Instr::BranchCmpFallback { .. } => 0x87d943ccc553c97f,
-                    Instr::BranchI32And(_) => 0xf16d67d2a7dbc15b,
-                    Instr::BranchI32AndImm(_) => 0xd97e76e4a08a4169,
-                    Instr::BranchI32Or(_) => 0xac6e6dcc9eb6cbff,
-                    Instr::BranchI32OrImm(_) => 0xa36564ae5f8bcf13,
-                    Instr::BranchI32Xor(_) => 0xa3fb8b494d435729,
-                    Instr::BranchI32XorImm(_) => 0xd8a580b0d15cf0ab,
-                    Instr::BranchI32AndEqz(_) => 0xc118754f6fd4adc1,
-                    Instr::BranchI32AndEqzImm(_) => 0xa90fbb32f7b47dc7,
-                    Instr::BranchI32OrEqz(_) => 0xa1bf533d0d3f0635,
-                    Instr::BranchI32OrEqzImm(_) => 0xfe99000769fe6ddd,
-                    Instr::BranchI32XorEqz(_) => 0xe2ade8751fc2e9a3,
-                    Instr::BranchI32XorEqzImm(_) => 0xc2c831b19dd7b0d3,
-                    Instr::BranchI32Eq(_) => 0xa9504bf5d4a47f69,
-                    Instr::BranchI32EqImm(_) => 0xcc68c4fcdd5df33b,
-                    Instr::BranchI32Ne(_) => 0xc574d8a05da369d3,
-                    Instr::BranchI32NeImm(_) => 0xcad08b87db831f77,
-                    Instr::BranchI32LtS(_) => 0xc590acad04f1f7b9,
-                    Instr::BranchI32LtSImm(_) => 0xd4d918a2cfb5323d,
-                    Instr::BranchI32LtU(_) => 0xc4999a7e79065d73,
-                    Instr::BranchI32LtUImm(_) => 0xf4fbdab953a405df,
-                    Instr::BranchI32LeS(_) => 0x98a04abe0fa4ce01,
-                    Instr::BranchI32LeSImm(_) => 0xa756dc299bd21ea7,
-                    Instr::BranchI32LeU(_) => 0xebe5a83153067f95,
-                    Instr::BranchI32LeUImm(_) => 0xd6adc84185c3b835,
-                    Instr::BranchI32GtS(_) => 0xc77aef230f5cb5c1,
-                    Instr::BranchI32GtSImm(_) => 0xb288abe58caf78fd,
-                    Instr::BranchI32GtU(_) => 0xdd85783639dea14b,
-                    Instr::BranchI32GtUImm(_) => 0xc95d435e3bd01389,
-                    Instr::BranchI32GeS(_) => 0xe448369b7242bd3b,
-                    Instr::BranchI32GeSImm(_) => 0xd3ed1490c07aec79,
-                    Instr::BranchI32GeU(_) => 0xcbdfc0da7497aca9,
-                    Instr::BranchI32GeUImm(_) => 0xd01255cca5331a55,
-                    Instr::BranchI64Eq(_) => 0xd224c9cfe6c84099,
-                    Instr::BranchI64EqImm(_) => 0xb1f5e1ce9cb796ed,
-                    Instr::BranchI64Ne(_) => 0xa015db66e4480f37,
-                    Instr::BranchI64NeImm(_) => 0xc9534063141f1b6d,
-                    Instr::BranchI64LtS(_) => 0xf3c68e18c0fc1c3b,
-                    Instr::BranchI64LtSImm(_) => 0xfaadf3a5cd945423,
-                    Instr::BranchI64LtU(_) => 0xe12e4e46df02fc2f,
-                    Instr::BranchI64LtUImm(_) => 0xb3476ce898e10f3d,
-                    Instr::BranchI64LeS(_) => 0xfb1cbfc1097a9473,
-                    Instr::BranchI64LeSImm(_) => 0xb4167d6222fadaf7,
-                    Instr::BranchI64LeU(_) => 0xb2932efcea953cab,
-                    Instr::BranchI64LeUImm(_) => 0x821f8f708d1f974f,
-                    Instr::BranchI64GtS(_) => 0xde5463b08e9f4729,
-                    Instr::BranchI64GtSImm(_) => 0xd765407968c91f01,
-                    Instr::BranchI64GtU(_) => 0xe2c63c2c0678900b,
-                    Instr::BranchI64GtUImm(_) => 0xd035ff821066bb9d,
-                    Instr::BranchI64GeS(_) => 0xe49707e335868fa5,
-                    Instr::BranchI64GeSImm(_) => 0xf857874dc48a27e9,
-                    Instr::BranchI64GeU(_) => 0x8b3ce0fa63214359,
-                    Instr::BranchI64GeUImm(_) => 0x93f90f4418d24385,
-                    Instr::BranchF32Eq(_) => 0x8647b33a7b8d4ea9,
-                    Instr::BranchF32Ne(_) => 0x9efcbece1096b201,
-                    Instr::BranchF32Lt(_) => 0xb2ab8327611d4843,
-                    Instr::BranchF32Le(_) => 0xfdb94010ae03ebad,
-                    Instr::BranchF32Gt(_) => 0xc74489c6752ef2e3,
-                    Instr::BranchF32Ge(_) => 0xb2588add33b6dc8d,
-                    Instr::BranchF64Eq(_) => 0xb0f911188eef530b,
-                    Instr::BranchF64Ne(_) => 0xb3a436328722e3af,
-                    Instr::BranchF64Lt(_) => 0x996ae1e7999d71a5,
-                    Instr::BranchF64Le(_) => 0xb00795c450f79fd7,
-                    Instr::BranchF64Gt(_) => 0xfd0f65f70976783f,
-                    Instr::BranchF64Ge(_) => 0xab728f867409f623,
-                    Instr::BranchTable { .. } => 0xe2510e47b282102d,
+                    Instr::BranchI32And { .. } => 0xf16d67d2a7dbc15b,
+                    Instr::BranchI32AndImm { .. } => 0xd97e76e4a08a4169,
+                    Instr::BranchI32Or { .. } => 0xac6e6dcc9eb6cbff,
+                    Instr::BranchI32OrImm { .. } => 0xa36564ae5f8bcf13,
+                    Instr::BranchI32Xor { .. } => 0xa3fb8b494d435729,
+                    Instr::BranchI32XorImm { .. } => 0xd8a580b0d15cf0ab,
+                    Instr::BranchI32AndEqz { .. } => 0xc118754f6fd4adc1,
+                    Instr::BranchI32AndEqzImm { .. } => 0xa90fbb32f7b47dc7,
+                    Instr::BranchI32OrEqz { .. } => 0xa1bf533d0d3f0635,
+                    Instr::BranchI32OrEqzImm { .. } => 0xfe99000769fe6ddd,
+                    Instr::BranchI32XorEqz { .. } => 0xe2ade8751fc2e9a3,
+                    Instr::BranchI32XorEqzImm { .. } => 0xc2c831b19dd7b0d3,
+                    Instr::BranchI32Eq { .. } => 0xa9504bf5d4a47f69,
+                    Instr::BranchI32EqImm { .. } => 0xcc68c4fcdd5df33b,
+                    Instr::BranchI32Ne { .. } => 0xc574d8a05da369d3,
+                    Instr::BranchI32NeImm { .. } => 0xcad08b87db831f77,
+                    Instr::BranchI32LtS { .. } => 0xc590acad04f1f7b9,
+                    Instr::BranchI32LtSImm { .. } => 0xd4d918a2cfb5323d,
+                    Instr::BranchI32LtU { .. } => 0xc4999a7e79065d73,
+                    Instr::BranchI32LtUImm { .. } => 0xf4fbdab953a405df,
+                    Instr::BranchI32LeS { .. } => 0x98a04abe0fa4ce01,
+                    Instr::BranchI32LeSImm { .. } => 0xa756dc299bd21ea7,
+                    Instr::BranchI32LeU { .. } => 0xebe5a83153067f95,
+                    Instr::BranchI32LeUImm { .. } => 0xd6adc84185c3b835,
+                    Instr::BranchI32GtS { .. } => 0xc77aef230f5cb5c1,
+                    Instr::BranchI32GtSImm { .. } => 0xb288abe58caf78fd,
+                    Instr::BranchI32GtU { .. } => 0xdd85783639dea14b,
+                    Instr::BranchI32GtUImm { .. } => 0xc95d435e3bd01389,
+                    Instr::BranchI32GeS { .. } => 0xe448369b7242bd3b,
+                    Instr::BranchI32GeSImm { .. } => 0xd3ed1490c07aec79,
+                    Instr::BranchI32GeU { .. } => 0xcbdfc0da7497aca9,
+                    Instr::BranchI32GeUImm { .. } => 0xd01255cca5331a55,
+                    Instr::BranchI64Eq { .. } => 0xd224c9cfe6c84099,
+                    Instr::BranchI64EqImm { .. } => 0xb1f5e1ce9cb796ed,
+                    Instr::BranchI64Ne { .. } => 0xa015db66e4480f37,
+                    Instr::BranchI64NeImm { .. } => 0xc9534063141f1b6d,
+                    Instr::BranchI64LtS { .. } => 0xf3c68e18c0fc1c3b,
+                    Instr::BranchI64LtSImm { .. } => 0xfaadf3a5cd945423,
+                    Instr::BranchI64LtU { .. } => 0xe12e4e46df02fc2f,
+                    Instr::BranchI64LtUImm { .. } => 0xb3476ce898e10f3d,
+                    Instr::BranchI64LeS { .. } => 0xfb1cbfc1097a9473,
+                    Instr::BranchI64LeSImm { .. } => 0xb4167d6222fadaf7,
+                    Instr::BranchI64LeU { .. } => 0xb2932efcea953cab,
+                    Instr::BranchI64LeUImm { .. } => 0x821f8f708d1f974f,
+                    Instr::BranchI64GtS { .. } => 0xde5463b08e9f4729,
+                    Instr::BranchI64GtSImm { .. } => 0xd765407968c91f01,
+                    Instr::BranchI64GtU { .. } => 0xe2c63c2c0678900b,
+                    Instr::BranchI64GtUImm { .. } => 0xd035ff821066bb9d,
+                    Instr::BranchI64GeS { .. } => 0xe49707e335868fa5,
+                    Instr::BranchI64GeSImm { .. } => 0xf857874dc48a27e9,
+                    Instr::BranchI64GeU { .. } => 0x8b3ce0fa63214359,
+                    Instr::BranchI64GeUImm { .. } => 0x93f90f4418d24385,
+                    Instr::BranchF32Eq { .. } => 0x8647b33a7b8d4ea9,
+                    Instr::BranchF32Ne { .. } => 0x9efcbece1096b201,
+                    Instr::BranchF32Lt { .. } => 0xb2ab8327611d4843,
+                    Instr::BranchF32Le { .. } => 0xfdb94010ae03ebad,
+                    Instr::BranchF32Gt { .. } => 0xc74489c6752ef2e3,
+                    Instr::BranchF32Ge { .. } => 0xb2588add33b6dc8d,
+                    Instr::BranchF64Eq { .. } => 0xb0f911188eef530b,
+                    Instr::BranchF64Ne { .. } => 0xb3a436328722e3af,
+                    Instr::BranchF64Lt { .. } => 0x996ae1e7999d71a5,
+                    Instr::BranchF64Le { .. } => 0xb00795c450f79fd7,
+                    Instr::BranchF64Gt { .. } => 0xfd0f65f70976783f,
+                    Instr::BranchF64Ge { .. } => 0xab728f867409f623,
                     Instr::Copy { .. } => 0xf476618f2886dc2f,
                     Instr::Copy2 { .. } => 0x81e0ef8904c1cfd5,
                     Instr::CopyImm32 { .. } => 0xaafc797a3f40deeb,
@@ -241,7 +229,6 @@ impl<'engine> Executor<'engine> {
                     Instr::CallIndirect0 { .. } => 0x89fdcc51af24bead,
                     Instr::CallIndirect { .. } => 0xbda3e8601077a917,
                     Instr::Select { .. } => 0xcab5aefcb578755f,
-                    Instr::SelectRev { .. } => 0xf0a2df16fbbb44ff,
                     Instr::SelectImm32 { .. } => 0xe640723b1c13c87f,
                     Instr::SelectI64Imm32 { .. } => 0xdcdfa8f4a8043ef7,
                     Instr::SelectF64Imm32 { .. } => 0x9bbf27a9403e07e3,
@@ -273,8 +260,8 @@ impl<'engine> Executor<'engine> {
                     Instr::TableFillAtExact { .. } => 0x8e49dd000adf0689,
                     Instr::TableGrow { .. } => 0x9e61c8c958c6b891,
                     Instr::TableGrowImm { .. } => 0x927de647f4278045,
-                    Instr::ElemDrop(_) => 0xbc4deb8b398e8a67,
-                    Instr::DataDrop(_) => 0xaf73214c7ebdae49,
+                    Instr::ElemDrop { .. } => 0xbc4deb8b398e8a67,
+                    Instr::DataDrop { .. } => 0xaf73214c7ebdae49,
                     Instr::MemorySize { .. } => 0xc99e9ec6fd30df43,
                     Instr::MemoryGrow { .. } => 0x902226df112aa763,
                     Instr::MemoryGrowBy { .. } => 0xded192652730b3f3,
@@ -306,313 +293,262 @@ impl<'engine> Executor<'engine> {
                     Instr::GlobalSet { .. } => 0xe498f909f87cf3d7,
                     Instr::GlobalSetI32Imm16 { .. } => 0xbeceb62a094167cf,
                     Instr::GlobalSetI64Imm16 { .. } => 0xb255daab1ca25487,
-                    Instr::I32Load(_) => 0xdf5b9b6fa80f3631,
-                    Instr::I32LoadAt(_) => 0xf78ad97d27554aab,
-                    Instr::I32LoadOffset16(_) => 0x8d191c3c9f983b7d,
-                    Instr::I64Load(_) => 0xcde7973deae4d139,
-                    Instr::I64LoadAt(_) => 0xc07cc699947471df,
-                    Instr::I64LoadOffset16(_) => 0xbfd2b00e2b3c39d5,
-                    Instr::F32Load(_) => 0xef1fbab218f04407,
-                    Instr::F32LoadAt(_) => 0xa8306192cd73002d,
-                    Instr::F32LoadOffset16(_) => 0xed0992f6c6239c7f,
-                    Instr::F64Load(_) => 0xf6689ac5b352c02f,
-                    Instr::F64LoadAt(_) => 0x97f205959c2a3d0b,
-                    Instr::F64LoadOffset16(_) => 0x94fbb4628a79462b,
-                    Instr::I32Load8s(_) => 0xfbb04e5f0a302d7b,
-                    Instr::I32Load8sAt(_) => 0x8e95f3bd70e298e7,
-                    Instr::I32Load8sOffset16(_) => 0xb736c7c8935178f5,
-                    Instr::I32Load8u(_) => 0xf0e219ca1d327f63,
-                    Instr::I32Load8uAt(_) => 0xc5ca3a6dc78a1a5d,
-                    Instr::I32Load8uOffset16(_) => 0xc1932ac6c5cd54ff,
-                    Instr::I32Load16s(_) => 0xe74c775c66d1dac7,
-                    Instr::I32Load16sAt(_) => 0xbc3c7a6541752f39,
-                    Instr::I32Load16sOffset16(_) => 0x98c1f9f35f8f6c6f,
-                    Instr::I32Load16u(_) => 0xdc6866c6770da481,
-                    Instr::I32Load16uAt(_) => 0xf194f68751968d29,
-                    Instr::I32Load16uOffset16(_) => 0xfc6373feac795559,
-                    Instr::I64Load8s(_) => 0xe727f7f48695f6ad,
-                    Instr::I64Load8sAt(_) => 0x9fccd4f7bd3f283f,
-                    Instr::I64Load8sOffset16(_) => 0xe865fdf1a1c55585,
-                    Instr::I64Load8u(_) => 0xf78018cfa4de9cf9,
-                    Instr::I64Load8uAt(_) => 0xed4846b1ee465189,
-                    Instr::I64Load8uOffset16(_) => 0xeb9c4fdbd7a69a7d,
-                    Instr::I64Load16s(_) => 0xce757e747c1781e1,
-                    Instr::I64Load16sAt(_) => 0x8f96d62fc6381b5b,
-                    Instr::I64Load16sOffset16(_) => 0x81747c9166be968d,
-                    Instr::I64Load16u(_) => 0x9d169d9c81872e09,
-                    Instr::I64Load16uAt(_) => 0x9ff242a4f7087a3b,
-                    Instr::I64Load16uOffset16(_) => 0x8a58890d2d2e95fd,
-                    Instr::I64Load32s(_) => 0xc7b0ed9c7dd80abb,
-                    Instr::I64Load32sAt(_) => 0xd22e5e85c5df8b81,
-                    Instr::I64Load32sOffset16(_) => 0xfe197c431899c773,
-                    Instr::I64Load32u(_) => 0xec214adc8d89b335,
-                    Instr::I64Load32uAt(_) => 0x8546452698268a41,
-                    Instr::I64Load32uOffset16(_) => 0x900023566f7219db,
-                    Instr::I32Store(_) => 0x89b4696626e6200f,
-                    Instr::I32StoreOffset16(_) => 0xa9624220aa646c45,
-                    Instr::I32StoreOffset16Imm16(_) => 0xd375c7c6e96da7eb,
-                    Instr::I32StoreAt(_) => 0x9507335cdf40a30f,
-                    Instr::I32StoreAtImm16(_) => 0xb124dcb1efb5a56f,
-                    Instr::I32Store8(_) => 0xb40f3d40e5cbc63f,
-                    Instr::I32Store8Offset16(_) => 0xb7784c5f610fa6b9,
-                    Instr::I32Store8Offset16Imm(_) => 0xb1b94e6edc784d75,
-                    Instr::I32Store8At(_) => 0xc114292b9396fca1,
-                    Instr::I32Store8AtImm(_) => 0xf958f99a724d3fa9,
-                    Instr::I32Store16(_) => 0xf4db4b8b777ba485,
-                    Instr::I32Store16Offset16(_) => 0x917265d951560b9f,
-                    Instr::I32Store16Offset16Imm(_) => 0x8e59e4b976ddd5c9,
-                    Instr::I32Store16At(_) => 0x85e34459fca92a63,
-                    Instr::I32Store16AtImm(_) => 0xffca87a7a28dcaaf,
-                    Instr::I64Store(_) => 0xaa0cfbf1401da505,
-                    Instr::I64StoreOffset16(_) => 0xde11b832af36e2c3,
-                    Instr::I64StoreOffset16Imm16(_) => 0x93a03ca4c630054d,
-                    Instr::I64StoreAt(_) => 0x8b7be36a892dbe9f,
-                    Instr::I64StoreAtImm16(_) => 0xa7164db75f5ffc79,
-                    Instr::I64Store8(_) => 0xb16fc3bd7fcf8229,
-                    Instr::I64Store8Offset16(_) => 0xf5324129bf7f4299,
-                    Instr::I64Store8Offset16Imm(_) => 0xeb1df0108fb325c1,
-                    Instr::I64Store8At(_) => 0xcc72df888ac47c3f,
-                    Instr::I64Store8AtImm(_) => 0x90e2c84d2be4491b,
-                    Instr::I64Store16(_) => 0xa670b61daad1097f,
-                    Instr::I64Store16Offset16(_) => 0xd09b793649e2dc69,
-                    Instr::I64Store16Offset16Imm(_) => 0xc5733c19fee00329,
-                    Instr::I64Store16At(_) => 0xc3471d0e7d859cdd,
-                    Instr::I64Store16AtImm(_) => 0xa27e4cfa22b0d101,
-                    Instr::I64Store32(_) => 0xacade9332186dab9,
-                    Instr::I64Store32Offset16(_) => 0xb5777e453e6429dd,
-                    Instr::I64Store32Offset16Imm16(_) => 0xc8435df9b5285e43,
-                    Instr::I64Store32At(_) => 0xb1cb0f6ea058bbbb,
-                    Instr::I64Store32AtImm16(_) => 0x8f79394f20bbda89,
-                    Instr::F32Store(_) => 0xd6df58b0ab76e99f,
-                    Instr::F32StoreOffset16(_) => 0xff1461bc14215f77,
-                    Instr::F32StoreAt(_) => 0xd2f62bd6fa3c90b9,
-                    Instr::F64Store(_) => 0xda484e6b7bd8d5db,
-                    Instr::F64StoreOffset16(_) => 0xac6256a3ca2605cb,
-                    Instr::F64StoreAt(_) => 0xe366beba3742040b,
-                    Instr::I32Eq(_) => 0x9aa2499f95dc3711,
-                    Instr::I32EqImm16(_) => 0x92ce6da978fdc40f,
-                    Instr::I64Eq(_) => 0xda860a17cb3b1a8b,
-                    Instr::I64EqImm16(_) => 0x89c423624314bf89,
-                    Instr::I32Ne(_) => 0xcbad0daca146769f,
-                    Instr::I32NeImm16(_) => 0xdca831c7fde0f85f,
-                    Instr::I64Ne(_) => 0xb0b2865912833697,
-                    Instr::I64NeImm16(_) => 0xbafcb515ea4df971,
-                    Instr::I32LtS(_) => 0xbfbff0c826a235f1,
-                    Instr::I32LtU(_) => 0x9081189b58e72897,
-                    Instr::I32LtSImm16(_) => 0x96d3c1dc900e1187,
-                    Instr::I32LtUImm16(_) => 0x9025ddff9d4de1b9,
-                    Instr::I64LtS(_) => 0xffe594b2eb58493d,
-                    Instr::I64LtU(_) => 0x9181211dcc10809b,
-                    Instr::I64LtSImm16(_) => 0xebbe15881dcd9e57,
-                    Instr::I64LtUImm16(_) => 0xfd542ad322324a27,
-                    Instr::I32GtS(_) => 0xe36a0bdacb5debf3,
-                    Instr::I32GtU(_) => 0xa5deeacd3be1c44b,
-                    Instr::I32GtSImm16(_) => 0x9a7f06186b3795c3,
-                    Instr::I32GtUImm16(_) => 0xaaf1e009bd26fd7b,
-                    Instr::I64GtS(_) => 0xc548cf95ce91a7b5,
-                    Instr::I64GtU(_) => 0xa68907e0fab9fb93,
-                    Instr::I64GtSImm16(_) => 0xf62c848e8eef17e9,
-                    Instr::I64GtUImm16(_) => 0x8a5c73b85ba194e1,
-                    Instr::I32LeS(_) => 0xbc5f6381dd176bb1,
-                    Instr::I32LeU(_) => 0xf7f780c2e00e18af,
-                    Instr::I32LeSImm16(_) => 0xc79fde79bd40aa77,
-                    Instr::I32LeUImm16(_) => 0xf9cc6a0ad9269149,
-                    Instr::I64LeS(_) => 0xc7fac5fcb8f8ed55,
-                    Instr::I64LeU(_) => 0xc1560dd513285d29,
-                    Instr::I64LeSImm16(_) => 0x99c89d3bbb73545d,
-                    Instr::I64LeUImm16(_) => 0xa3524cb19ca06bb5,
-                    Instr::I32GeS(_) => 0x98bef5ced76c7645,
-                    Instr::I32GeU(_) => 0xd53ed9432d2a8143,
-                    Instr::I32GeSImm16(_) => 0xfee355988dee53db,
-                    Instr::I32GeUImm16(_) => 0xbb62bd7c6348e5c3,
-                    Instr::I64GeS(_) => 0xd8f40b0c313c453d,
-                    Instr::I64GeU(_) => 0x98bfaac3f19897e1,
-                    Instr::I64GeSImm16(_) => 0x8956eaaa98c2e647,
-                    Instr::I64GeUImm16(_) => 0xe11e8b930ba0afed,
-                    Instr::F32Eq(_) => 0xc3587b028ec7b7d7,
-                    Instr::F64Eq(_) => 0x90fa962604933679,
-                    Instr::F32Ne(_) => 0xe8b028b8a40b6323,
-                    Instr::F64Ne(_) => 0xe511c632ed75d0ad,
-                    Instr::F32Lt(_) => 0xafe8adc3497d922f,
-                    Instr::F64Lt(_) => 0xa24d51fe3b08563d,
-                    Instr::F32Le(_) => 0xa9470d623de1df2f,
-                    Instr::F64Le(_) => 0xe5e889a7f2d74d67,
-                    Instr::F32Gt(_) => 0x8cbe5aa7efd2dac5,
-                    Instr::F64Gt(_) => 0xa2b5a501d74cc69b,
-                    Instr::F32Ge(_) => 0x9103bfb43045fc5b,
-                    Instr::F64Ge(_) => 0xe4832a9c5a4a0741,
-                    Instr::I32Clz(_) => 0xd0b363eee33e2a75,
-                    Instr::I64Clz(_) => 0xbb13e80b90e6d539,
-                    Instr::I32Ctz(_) => 0xa867670e58678389,
-                    Instr::I64Ctz(_) => 0x8ad83f5db31d4957,
-                    Instr::I32Popcnt(_) => 0xd8ad8c4a45f7cd09,
-                    Instr::I64Popcnt(_) => 0xb9603f856bc14e5b,
-                    Instr::I32Add(_) => 0xa1f888c0cefc7b6d,
-                    Instr::I64Add(_) => 0xba1adc988a80490f,
-                    Instr::I32AddImm16(_) => 0x8bc5e0c56da6ee3d,
-                    Instr::I64AddImm16(_) => 0xf75f1d741e812869,
-                    Instr::I32Sub(_) => 0xf095a662a345025f,
-                    Instr::I64Sub(_) => 0xb251e2585fd105c7,
-                    Instr::I32SubImm16Rev(_) => 0x9bccf96d076e1e77,
-                    Instr::I64SubImm16Rev(_) => 0xf65f7135553a54d5,
-                    Instr::I32Mul(_) => 0xc36cfc74fa61f2b3,
-                    Instr::I64Mul(_) => 0xe9fe8ad570b71a99,
-                    Instr::I32MulImm16(_) => 0x99c04a0680397c59,
-                    Instr::I64MulImm16(_) => 0xa461c2db76abc31f,
-                    Instr::I32DivS(_) => 0xd8e9ed1b036c4299,
-                    Instr::I64DivS(_) => 0xc18a29741fec7821,
-                    Instr::I32DivSImm16(_) => 0x85487d90b69b42eb,
-                    Instr::I64DivSImm16(_) => 0xdf796fb72044ef89,
-                    Instr::I32DivSImm16Rev(_) => 0xb229de81d802ca3d,
-                    Instr::I64DivSImm16Rev(_) => 0xbee33b07c1d429e1,
-                    Instr::I32DivU(_) => 0x98f910b2a2344797,
-                    Instr::I64DivU(_) => 0xe4e5f443dafb6781,
-                    Instr::I32DivUImm16(_) => 0xa719ab83a81107c3,
-                    Instr::I64DivUImm16(_) => 0xf0a697a43b3d35d7,
-                    Instr::I32DivUImm16Rev(_) => 0xdd4813bbc3fe6d13,
-                    Instr::I64DivUImm16Rev(_) => 0xb72767906e0a5cfb,
-                    Instr::I32RemS(_) => 0x9f03cbda2aa5fa45,
-                    Instr::I64RemS(_) => 0xccf3ffab51808eaf,
-                    Instr::I32RemSImm16(_) => 0x9d4c371e9aef0583,
-                    Instr::I64RemSImm16(_) => 0x947e68335d37e889,
-                    Instr::I32RemSImm16Rev(_) => 0x96866c6454a95f1d,
-                    Instr::I64RemSImm16Rev(_) => 0x860324e1882094a3,
-                    Instr::I32RemU(_) => 0xc543d9e99bfe04db,
-                    Instr::I64RemU(_) => 0x9f9e5bd14453abf7,
-                    Instr::I32RemUImm16(_) => 0xa0023a1b616065a5,
-                    Instr::I64RemUImm16(_) => 0xd45fb600aa0ebecb,
-                    Instr::I32RemUImm16Rev(_) => 0xeb6a8bb4c61401c5,
-                    Instr::I64RemUImm16Rev(_) => 0xd793fa5aa0a964cd,
-                    Instr::I32And(_) => 0xda40caeb3a552221,
-                    Instr::I32AndEqz(_) => 0xdae0c4aaf21a2375,
-                    Instr::I32AndEqzImm16(_) => 0xe3b2a67a5da4fa6b,
-                    Instr::I32AndImm16(_) => 0x8698e382452765f1,
-                    Instr::I64And(_) => 0xf96e3bc1640f67cd,
-                    Instr::I64AndImm16(_) => 0xcb4730c03868c6c9,
-                    Instr::I32Or(_) => 0xfe54c1a4cc88dbfd,
-                    Instr::I32OrEqz(_) => 0x81c4ae5533789a77,
-                    Instr::I32OrEqzImm16(_) => 0xd5a79e8c5ff0d4f7,
-                    Instr::I32OrImm16(_) => 0x907c4d22bec999ad,
-                    Instr::I64Or(_) => 0xdc758f1076325dcf,
-                    Instr::I64OrImm16(_) => 0xcea9b6298da032eb,
-                    Instr::I32Xor(_) => 0x820cea6beee5132b,
-                    Instr::I32XorEqz(_) => 0xfb5646a229eba923,
-                    Instr::I32XorEqzImm16(_) => 0xa3d2eee0dbef491f,
-                    Instr::I32XorImm16(_) => 0xe0802ae028ddf527,
-                    Instr::I64Xor(_) => 0xcf8b3ddb8044776f,
-                    Instr::I64XorImm16(_) => 0xa84e47947f7723ad,
-                    Instr::I32Shl(_) => 0x997deb70c648fa15,
-                    Instr::I64Shl(_) => 0x80f706f88d804a25,
-                    Instr::I32ShlImm(_) => 0xfcc148faacf59d53,
-                    Instr::I64ShlImm(_) => 0xf6d8e1fa8e82bd65,
-                    Instr::I32ShlImm16Rev(_) => 0xd9b8925b3c4f7c43,
-                    Instr::I64ShlImm16Rev(_) => 0xbb5ab94e3b3b62a1,
-                    Instr::I32ShrU(_) => 0x949b3946cd09a095,
-                    Instr::I64ShrU(_) => 0xbc8d8ae8fafe0cb5,
-                    Instr::I32ShrUImm(_) => 0xdd921c308dd476c5,
-                    Instr::I64ShrUImm(_) => 0xb55a52fb3302897d,
-                    Instr::I32ShrUImm16Rev(_) => 0xf542ca19c6ede7e5,
-                    Instr::I64ShrUImm16Rev(_) => 0xdc4c2c1ee8fd89b9,
-                    Instr::I32ShrS(_) => 0xe9925858193a7679,
-                    Instr::I64ShrS(_) => 0xfb846cd977392cf3,
-                    Instr::I32ShrSImm(_) => 0xc771e42e66e029b7,
-                    Instr::I64ShrSImm(_) => 0xd65d3e841e5ef493,
-                    Instr::I32ShrSImm16Rev(_) => 0x81f8a0aebcf9ccfb,
-                    Instr::I64ShrSImm16Rev(_) => 0xc24ad68846b0f2d7,
-                    Instr::I32Rotl(_) => 0xdfd1ecfe45e3e365,
-                    Instr::I64Rotl(_) => 0xc2c0280be48f6e2b,
-                    Instr::I32RotlImm(_) => 0x821b5a3bc30952e5,
-                    Instr::I64RotlImm(_) => 0xb388feacd3e9a985,
-                    Instr::I32RotlImm16Rev(_) => 0xe0346c992152e0ad,
-                    Instr::I64RotlImm16Rev(_) => 0xbc323dcbfa95b9c1,
-                    Instr::I32Rotr(_) => 0xfce450167abfef91,
-                    Instr::I64Rotr(_) => 0xd35af32013838db5,
-                    Instr::I32RotrImm(_) => 0xb17d776a68c2901d,
-                    Instr::I64RotrImm(_) => 0xdc854e900d8c8b91,
-                    Instr::I32RotrImm16Rev(_) => 0xc3da2fbf5194e14f,
-                    Instr::I64RotrImm16Rev(_) => 0x8ce225f0c3ba867d,
-                    Instr::F32Abs(_) => 0xcd5c2fff391d82cb,
-                    Instr::F64Abs(_) => 0xc4736057bf6ce827,
-                    Instr::F32Neg(_) => 0xd366f959bf938435,
-                    Instr::F64Neg(_) => 0x8c01a158032456c5,
-                    Instr::F32Ceil(_) => 0xf5684f567a1e5c81,
-                    Instr::F64Ceil(_) => 0xbc6729b56b5bf64f,
-                    Instr::F32Floor(_) => 0xc3397446971c7b1b,
-                    Instr::F64Floor(_) => 0xc21648fabc149443,
-                    Instr::F32Trunc(_) => 0x930c87d1457a0b2f,
-                    Instr::F64Trunc(_) => 0xc457947a5515448d,
-                    Instr::F32Nearest(_) => 0xdcbd8018d58a0133,
-                    Instr::F64Nearest(_) => 0xe719d229d8dc9d11,
-                    Instr::F32Sqrt(_) => 0x8e031a9674797f6f,
-                    Instr::F64Sqrt(_) => 0xede241e1bdbf8add,
-                    Instr::F32Add(_) => 0xc0246fd5a4fa2569,
-                    Instr::F64Add(_) => 0xae61b186b8d627b1,
-                    Instr::F32Sub(_) => 0xf37398a1108c36cb,
-                    Instr::F64Sub(_) => 0xaaf86176c0dc89f5,
-                    Instr::F32Mul(_) => 0xbe5eb79b83c0c7b1,
-                    Instr::F64Mul(_) => 0x9b200d1c1640bf0d,
-                    Instr::F32Div(_) => 0xd22d29503c878647,
-                    Instr::F64Div(_) => 0x91b08c54e524bb09,
-                    Instr::F32Min(_) => 0xf83af276dd4b617f,
-                    Instr::F64Min(_) => 0xeb5d7d82375f7be7,
-                    Instr::F32Max(_) => 0x8f4d06f60f1c84fb,
-                    Instr::F64Max(_) => 0xb24f6877be71ebd5,
-                    Instr::F32Copysign(_) => 0xec122620e993dfcd,
-                    Instr::F64Copysign(_) => 0xf27f1850006566c9,
-                    Instr::F32CopysignImm(_) => 0x94d19450082a4ce9,
-                    Instr::F64CopysignImm(_) => 0x84b094c8c0503805,
-                    Instr::I32WrapI64(_) => 0xd7348da1051ffdf5,
-                    Instr::I64ExtendI32S(_) => 0xbffb8ca25ae4bf8f,
-                    Instr::I64ExtendI32U(_) => 0xec15704d37b95ec7,
-                    Instr::I32TruncF32S(_) => 0xa8edf1813c31175b,
-                    Instr::I32TruncF32U(_) => 0xf980305a8ba3be0f,
-                    Instr::I32TruncF64S(_) => 0xb982c8f45dcd5731,
-                    Instr::I32TruncF64U(_) => 0x9ca1670d1e934f45,
-                    Instr::I64TruncF32S(_) => 0xeb2506c7a7cfe6f7,
-                    Instr::I64TruncF32U(_) => 0xa230e0381f36668d,
-                    Instr::I64TruncF64S(_) => 0xce02765ab94df325,
-                    Instr::I64TruncF64U(_) => 0xb39253799e21a72d,
-                    Instr::I32TruncSatF32S(_) => 0xa164fb50eec581d3,
-                    Instr::I32TruncSatF32U(_) => 0xabac89637bdb1d8f,
-                    Instr::I32TruncSatF64S(_) => 0xe8b8c4421046aedd,
-                    Instr::I32TruncSatF64U(_) => 0x91c87015a56a944d,
-                    Instr::I64TruncSatF32S(_) => 0xb909e169382afddd,
-                    Instr::I64TruncSatF32U(_) => 0xc6f884d2705bf2d3,
-                    Instr::I64TruncSatF64S(_) => 0xa5e8386963664fa3,
-                    Instr::I64TruncSatF64U(_) => 0xa43800f9e4975aff,
-                    Instr::I32Extend8S(_) => 0xdecfc0dc5cb809af,
-                    Instr::I32Extend16S(_) => 0xcdf6bb7756026125,
-                    Instr::I64Extend8S(_) => 0xb906176cee2380bf,
-                    Instr::I64Extend16S(_) => 0xf0382669ed7a55f1,
-                    Instr::I64Extend32S(_) => 0xb61b2de5652d06e9,
-                    Instr::F32DemoteF64(_) => 0xbf82e5dd4495233b,
-                    Instr::F64PromoteF32(_) => 0xf42a79d7ed7c17c3,
-                    Instr::F32ConvertI32S(_) => 0x9e65030287165e29,
-                    Instr::F32ConvertI32U(_) => 0xe244f0acd2209f0b,
-                    Instr::F32ConvertI64S(_) => 0xd007d6d9333c7405,
-                    Instr::F32ConvertI64U(_) => 0xf31a7af87a7b7f61,
-                    Instr::F64ConvertI32S(_) => 0xbef1a0dfa7540b4d,
-                    Instr::F64ConvertI32U(_) => 0xa168200e59e18dcd,
-                    Instr::F64ConvertI64S(_) => 0xb3a2d5946ee565e3,
-                    Instr::F64ConvertI64U(_) => 0x92ad2f2873e8fbc5,
+                    Instr::I32Load { .. } => 0xdf5b9b6fa80f3631,
+                    Instr::I32LoadAt { .. } => 0xf78ad97d27554aab,
+                    Instr::I32LoadOffset16 { .. } => 0x8d191c3c9f983b7d,
+                    Instr::I64Load { .. } => 0xcde7973deae4d139,
+                    Instr::I64LoadAt { .. } => 0xc07cc699947471df,
+                    Instr::I64LoadOffset16 { .. } => 0xbfd2b00e2b3c39d5,
+                    Instr::F32Load { .. } => 0xef1fbab218f04407,
+                    Instr::F32LoadAt { .. } => 0xa8306192cd73002d,
+                    Instr::F32LoadOffset16 { .. } => 0xed0992f6c6239c7f,
+                    Instr::F64Load { .. } => 0xf6689ac5b352c02f,
+                    Instr::F64LoadAt { .. } => 0x97f205959c2a3d0b,
+                    Instr::F64LoadOffset16 { .. } => 0x94fbb4628a79462b,
+                    Instr::I32Load8s { .. } => 0xfbb04e5f0a302d7b,
+                    Instr::I32Load8sAt { .. } => 0x8e95f3bd70e298e7,
+                    Instr::I32Load8sOffset16 { .. } => 0xb736c7c8935178f5,
+                    Instr::I32Load8u { .. } => 0xf0e219ca1d327f63,
+                    Instr::I32Load8uAt { .. } => 0xc5ca3a6dc78a1a5d,
+                    Instr::I32Load8uOffset16 { .. } => 0xc1932ac6c5cd54ff,
+                    Instr::I32Load16s { .. } => 0xe74c775c66d1dac7,
+                    Instr::I32Load16sAt { .. } => 0xbc3c7a6541752f39,
+                    Instr::I32Load16sOffset16 { .. } => 0x98c1f9f35f8f6c6f,
+                    Instr::I32Load16u { .. } => 0xdc6866c6770da481,
+                    Instr::I32Load16uAt { .. } => 0xf194f68751968d29,
+                    Instr::I32Load16uOffset16 { .. } => 0xfc6373feac795559,
+                    Instr::I64Load8s { .. } => 0xe727f7f48695f6ad,
+                    Instr::I64Load8sAt { .. } => 0x9fccd4f7bd3f283f,
+                    Instr::I64Load8sOffset16 { .. } => 0xe865fdf1a1c55585,
+                    Instr::I64Load8u { .. } => 0xf78018cfa4de9cf9,
+                    Instr::I64Load8uAt { .. } => 0xed4846b1ee465189,
+                    Instr::I64Load8uOffset16 { .. } => 0xeb9c4fdbd7a69a7d,
+                    Instr::I64Load16s { .. } => 0xce757e747c1781e1,
+                    Instr::I64Load16sAt { .. } => 0x8f96d62fc6381b5b,
+                    Instr::I64Load16sOffset16 { .. } => 0x81747c9166be968d,
+                    Instr::I64Load16u { .. } => 0x9d169d9c81872e09,
+                    Instr::I64Load16uAt { .. } => 0x9ff242a4f7087a3b,
+                    Instr::I64Load16uOffset16 { .. } => 0x8a58890d2d2e95fd,
+                    Instr::I64Load32s { .. } => 0xc7b0ed9c7dd80abb,
+                    Instr::I64Load32sAt { .. } => 0xd22e5e85c5df8b81,
+                    Instr::I64Load32sOffset16 { .. } => 0xfe197c431899c773,
+                    Instr::I64Load32u { .. } => 0xec214adc8d89b335,
+                    Instr::I64Load32uAt { .. } => 0x8546452698268a41,
+                    Instr::I64Load32uOffset16 { .. } => 0x900023566f7219db,
+                    Instr::I32Store { .. } => 0x89b4696626e6200f,
+                    Instr::I32StoreOffset16 { .. } => 0xa9624220aa646c45,
+                    Instr::I32StoreOffset16Imm16 { .. } => 0xd375c7c6e96da7eb,
+                    Instr::I32StoreAt { .. } => 0x9507335cdf40a30f,
+                    Instr::I32StoreAtImm16 { .. } => 0xb124dcb1efb5a56f,
+                    Instr::I32Store8 { .. } => 0xb40f3d40e5cbc63f,
+                    Instr::I32Store8Offset16 { .. } => 0xb7784c5f610fa6b9,
+                    Instr::I32Store8Offset16Imm { .. } => 0xb1b94e6edc784d75,
+                    Instr::I32Store8At { .. } => 0xc114292b9396fca1,
+                    Instr::I32Store8AtImm { .. } => 0xf958f99a724d3fa9,
+                    Instr::I32Store16 { .. } => 0xf4db4b8b777ba485,
+                    Instr::I32Store16Offset16 { .. } => 0x917265d951560b9f,
+                    Instr::I32Store16Offset16Imm { .. } => 0x8e59e4b976ddd5c9,
+                    Instr::I32Store16At { .. } => 0x85e34459fca92a63,
+                    Instr::I32Store16AtImm { .. } => 0xffca87a7a28dcaaf,
+                    Instr::I64Store { .. } => 0xaa0cfbf1401da505,
+                    Instr::I64StoreOffset16 { .. } => 0xde11b832af36e2c3,
+                    Instr::I64StoreOffset16Imm16 { .. } => 0x93a03ca4c630054d,
+                    Instr::I64StoreAt { .. } => 0x8b7be36a892dbe9f,
+                    Instr::I64StoreAtImm16 { .. } => 0xa7164db75f5ffc79,
+                    Instr::I64Store8 { .. } => 0xb16fc3bd7fcf8229,
+                    Instr::I64Store8Offset16 { .. } => 0xf5324129bf7f4299,
+                    Instr::I64Store8Offset16Imm { .. } => 0xeb1df0108fb325c1,
+                    Instr::I64Store8At { .. } => 0xcc72df888ac47c3f,
+                    Instr::I64Store8AtImm { .. } => 0x90e2c84d2be4491b,
+                    Instr::I64Store16 { .. } => 0xa670b61daad1097f,
+                    Instr::I64Store16Offset16 { .. } => 0xd09b793649e2dc69,
+                    Instr::I64Store16Offset16Imm { .. } => 0xc5733c19fee00329,
+                    Instr::I64Store16At { .. } => 0xc3471d0e7d859cdd,
+                    Instr::I64Store16AtImm { .. } => 0xa27e4cfa22b0d101,
+                    Instr::I64Store32 { .. } => 0xacade9332186dab9,
+                    Instr::I64Store32Offset16 { .. } => 0xb5777e453e6429dd,
+                    Instr::I64Store32Offset16Imm16 { .. } => 0xc8435df9b5285e43,
+                    Instr::I64Store32At { .. } => 0xb1cb0f6ea058bbbb,
+                    Instr::I64Store32AtImm16 { .. } => 0x8f79394f20bbda89,
+                    Instr::F32Store { .. } => 0xd6df58b0ab76e99f,
+                    Instr::F32StoreOffset16 { .. } => 0xff1461bc14215f77,
+                    Instr::F32StoreAt { .. } => 0xd2f62bd6fa3c90b9,
+                    Instr::F64Store { .. } => 0xda484e6b7bd8d5db,
+                    Instr::F64StoreOffset16 { .. } => 0xac6256a3ca2605cb,
+                    Instr::F64StoreAt { .. } => 0xe366beba3742040b,
+                    Instr::I32Eq { .. } => 0x9aa2499f95dc3711,
+                    Instr::I32EqImm16 { .. } => 0x92ce6da978fdc40f,
+                    Instr::I64Eq { .. } => 0xda860a17cb3b1a8b,
+                    Instr::I64EqImm16 { .. } => 0x89c423624314bf89,
+                    Instr::I32Ne { .. } => 0xcbad0daca146769f,
+                    Instr::I32NeImm16 { .. } => 0xdca831c7fde0f85f,
+                    Instr::I64Ne { .. } => 0xb0b2865912833697,
+                    Instr::I64NeImm16 { .. } => 0xbafcb515ea4df971,
+                    Instr::I32LtS { .. } => 0xbfbff0c826a235f1,
+                    Instr::I32LtU { .. } => 0x9081189b58e72897,
+                    Instr::I32LtSImm16 { .. } => 0x96d3c1dc900e1187,
+                    Instr::I32LtUImm16 { .. } => 0x9025ddff9d4de1b9,
+                    Instr::I64LtS { .. } => 0xffe594b2eb58493d,
+                    Instr::I64LtU { .. } => 0x9181211dcc10809b,
+                    Instr::I64LtSImm16 { .. } => 0xebbe15881dcd9e57,
+                    Instr::I64LtUImm16 { .. } => 0xfd542ad322324a27,
+                    Instr::I32GtS { .. } => 0xe36a0bdacb5debf3,
+                    Instr::I32GtU { .. } => 0xa5deeacd3be1c44b,
+                    Instr::I32GtSImm16 { .. } => 0x9a7f06186b3795c3,
+                    Instr::I32GtUImm16 { .. } => 0xaaf1e009bd26fd7b,
+                    Instr::I64GtS { .. } => 0xc548cf95ce91a7b5,
+                    Instr::I64GtU { .. } => 0xa68907e0fab9fb93,
+                    Instr::I64GtSImm16 { .. } => 0xf62c848e8eef17e9,
+                    Instr::I64GtUImm16 { .. } => 0x8a5c73b85ba194e1,
+                    Instr::I32LeS { .. } => 0xbc5f6381dd176bb1,
+                    Instr::I32LeU { .. } => 0xf7f780c2e00e18af,
+                    Instr::I32LeSImm16 { .. } => 0xc79fde79bd40aa77,
+                    Instr::I32LeUImm16 { .. } => 0xf9cc6a0ad9269149,
+                    Instr::I64LeS { .. } => 0xc7fac5fcb8f8ed55,
+                    Instr::I64LeU { .. } => 0xc1560dd513285d29,
+                    Instr::I64LeSImm16 { .. } => 0x99c89d3bbb73545d,
+                    Instr::I64LeUImm16 { .. } => 0xa3524cb19ca06bb5,
+                    Instr::I32GeS { .. } => 0x98bef5ced76c7645,
+                    Instr::I32GeU { .. } => 0xd53ed9432d2a8143,
+                    Instr::I32GeSImm16 { .. } => 0xfee355988dee53db,
+                    Instr::I32GeUImm16 { .. } => 0xbb62bd7c6348e5c3,
+                    Instr::I64GeS { .. } => 0xd8f40b0c313c453d,
+                    Instr::I64GeU { .. } => 0x98bfaac3f19897e1,
+                    Instr::I64GeSImm16 { .. } => 0x8956eaaa98c2e647,
+                    Instr::I64GeUImm16 { .. } => 0xe11e8b930ba0afed,
+                    Instr::F32Eq { .. } => 0xc3587b028ec7b7d7,
+                    Instr::F64Eq { .. } => 0x90fa962604933679,
+                    Instr::F32Ne { .. } => 0xe8b028b8a40b6323,
+                    Instr::F64Ne { .. } => 0xe511c632ed75d0ad,
+                    Instr::F32Lt { .. } => 0xafe8adc3497d922f,
+                    Instr::F64Lt { .. } => 0xa24d51fe3b08563d,
+                    Instr::F32Le { .. } => 0xa9470d623de1df2f,
+                    Instr::F64Le { .. } => 0xe5e889a7f2d74d67,
+                    Instr::F32Gt { .. } => 0x8cbe5aa7efd2dac5,
+                    Instr::F64Gt { .. } => 0xa2b5a501d74cc69b,
+                    Instr::F32Ge { .. } => 0x9103bfb43045fc5b,
+                    Instr::F64Ge { .. } => 0xe4832a9c5a4a0741,
+                    Instr::I32Clz { .. } => 0xd0b363eee33e2a75,
+                    Instr::I64Clz { .. } => 0xbb13e80b90e6d539,
+                    Instr::I32Ctz { .. } => 0xa867670e58678389,
+                    Instr::I64Ctz { .. } => 0x8ad83f5db31d4957,
+                    Instr::I32Popcnt { .. } => 0xd8ad8c4a45f7cd09,
+                    Instr::I64Popcnt { .. } => 0xb9603f856bc14e5b,
+                    Instr::I32Add { .. } => 0xa1f888c0cefc7b6d,
+                    Instr::I64Add { .. } => 0xba1adc988a80490f,
+                    Instr::I32AddImm16 { .. } => 0x8bc5e0c56da6ee3d,
+                    Instr::I64AddImm16 { .. } => 0xf75f1d741e812869,
+                    Instr::I32Sub { .. } => 0xf095a662a345025f,
+                    Instr::I64Sub { .. } => 0xb251e2585fd105c7,
+                    Instr::I32Mul { .. } => 0xc36cfc74fa61f2b3,
+                    Instr::I64Mul { .. } => 0xe9fe8ad570b71a99,
+                    Instr::I32MulImm16 { .. } => 0x99c04a0680397c59,
+                    Instr::I64MulImm16 { .. } => 0xa461c2db76abc31f,
+                    Instr::I32DivS { .. } => 0xd8e9ed1b036c4299,
+                    Instr::I64DivS { .. } => 0xc18a29741fec7821,
+                    Instr::I32DivU { .. } => 0x98f910b2a2344797,
+                    Instr::I64DivU { .. } => 0xe4e5f443dafb6781,
+                    Instr::I32RemS { .. } => 0x9f03cbda2aa5fa45,
+                    Instr::I64RemS { .. } => 0xccf3ffab51808eaf,
+                    Instr::I32RemU { .. } => 0xc543d9e99bfe04db,
+                    Instr::I64RemU { .. } => 0x9f9e5bd14453abf7,
+                    Instr::I32And { .. } => 0xda40caeb3a552221,
+                    Instr::I32AndEqz { .. } => 0xdae0c4aaf21a2375,
+                    Instr::I32AndEqzImm16 { .. } => 0xe3b2a67a5da4fa6b,
+                    Instr::I32AndImm16 { .. } => 0x8698e382452765f1,
+                    Instr::I64And { .. } => 0xf96e3bc1640f67cd,
+                    Instr::I64AndImm16 { .. } => 0xcb4730c03868c6c9,
+                    Instr::I32Or { .. } => 0xfe54c1a4cc88dbfd,
+                    Instr::I32OrEqz { .. } => 0x81c4ae5533789a77,
+                    Instr::I32OrEqzImm16 { .. } => 0xd5a79e8c5ff0d4f7,
+                    Instr::I32OrImm16 { .. } => 0x907c4d22bec999ad,
+                    Instr::I64Or { .. } => 0xdc758f1076325dcf,
+                    Instr::I64OrImm16 { .. } => 0xcea9b6298da032eb,
+                    Instr::I32Xor { .. } => 0x820cea6beee5132b,
+                    Instr::I32XorEqz { .. } => 0xfb5646a229eba923,
+                    Instr::I32XorEqzImm16 { .. } => 0xa3d2eee0dbef491f,
+                    Instr::I32XorImm16 { .. } => 0xe0802ae028ddf527,
+                    Instr::I64Xor { .. } => 0xcf8b3ddb8044776f,
+                    Instr::I64XorImm16 { .. } => 0xa84e47947f7723ad,
+                    Instr::I32Shl { .. } => 0x997deb70c648fa15,
+                    Instr::I64Shl { .. } => 0x80f706f88d804a25,
+                    Instr::I32ShrU { .. } => 0x949b3946cd09a095,
+                    Instr::I64ShrU { .. } => 0xbc8d8ae8fafe0cb5,
+                    Instr::I32ShrS { .. } => 0xe9925858193a7679,
+                    Instr::I64ShrS { .. } => 0xfb846cd977392cf3,
+                    Instr::I32Rotl { .. } => 0xdfd1ecfe45e3e365,
+                    Instr::I64Rotl { .. } => 0xc2c0280be48f6e2b,
+                    Instr::I32Rotr { .. } => 0xfce450167abfef91,
+                    Instr::I64Rotr { .. } => 0xd35af32013838db5,
+                    Instr::F32Abs { .. } => 0xcd5c2fff391d82cb,
+                    Instr::F64Abs { .. } => 0xc4736057bf6ce827,
+                    Instr::F32Neg { .. } => 0xd366f959bf938435,
+                    Instr::F64Neg { .. } => 0x8c01a158032456c5,
+                    Instr::F32Ceil { .. } => 0xf5684f567a1e5c81,
+                    Instr::F64Ceil { .. } => 0xbc6729b56b5bf64f,
+                    Instr::F32Floor { .. } => 0xc3397446971c7b1b,
+                    Instr::F64Floor { .. } => 0xc21648fabc149443,
+                    Instr::F32Trunc { .. } => 0x930c87d1457a0b2f,
+                    Instr::F64Trunc { .. } => 0xc457947a5515448d,
+                    Instr::F32Nearest { .. } => 0xdcbd8018d58a0133,
+                    Instr::F64Nearest { .. } => 0xe719d229d8dc9d11,
+                    Instr::F32Sqrt { .. } => 0x8e031a9674797f6f,
+                    Instr::F64Sqrt { .. } => 0xede241e1bdbf8add,
+                    Instr::F32Add { .. } => 0xc0246fd5a4fa2569,
+                    Instr::F64Add { .. } => 0xae61b186b8d627b1,
+                    Instr::F32Sub { .. } => 0xf37398a1108c36cb,
+                    Instr::F64Sub { .. } => 0xaaf86176c0dc89f5,
+                    Instr::F32Mul { .. } => 0xbe5eb79b83c0c7b1,
+                    Instr::F64Mul { .. } => 0x9b200d1c1640bf0d,
+                    Instr::F32Div { .. } => 0xd22d29503c878647,
+                    Instr::F64Div { .. } => 0x91b08c54e524bb09,
+                    Instr::F32Min { .. } => 0xf83af276dd4b617f,
+                    Instr::F64Min { .. } => 0xeb5d7d82375f7be7,
+                    Instr::F32Max { .. } => 0x8f4d06f60f1c84fb,
+                    Instr::F64Max { .. } => 0xb24f6877be71ebd5,
+                    Instr::F32Copysign { .. } => 0xec122620e993dfcd,
+                    Instr::F64Copysign { .. } => 0xf27f1850006566c9,
+                    Instr::F32CopysignImm { .. } => 0x94d19450082a4ce9,
+                    Instr::F64CopysignImm { .. } => 0x84b094c8c0503805,
+                    Instr::I32WrapI64 { .. } => 0xd7348da1051ffdf5,
+                    Instr::I32TruncF32S { .. } => 0xa8edf1813c31175b,
+                    Instr::I32TruncF32U { .. } => 0xf980305a8ba3be0f,
+                    Instr::I32TruncF64S { .. } => 0xb982c8f45dcd5731,
+                    Instr::I32TruncF64U { .. } => 0x9ca1670d1e934f45,
+                    Instr::I64TruncF32S { .. } => 0xeb2506c7a7cfe6f7,
+                    Instr::I64TruncF32U { .. } => 0xa230e0381f36668d,
+                    Instr::I64TruncF64S { .. } => 0xce02765ab94df325,
+                    Instr::I64TruncF64U { .. } => 0xb39253799e21a72d,
+                    Instr::I32TruncSatF32S { .. } => 0xa164fb50eec581d3,
+                    Instr::I32TruncSatF32U { .. } => 0xabac89637bdb1d8f,
+                    Instr::I32TruncSatF64S { .. } => 0xe8b8c4421046aedd,
+                    Instr::I32TruncSatF64U { .. } => 0x91c87015a56a944d,
+                    Instr::I64TruncSatF32S { .. } => 0xb909e169382afddd,
+                    Instr::I64TruncSatF32U { .. } => 0xc6f884d2705bf2d3,
+                    Instr::I64TruncSatF64S { .. } => 0xa5e8386963664fa3,
+                    Instr::I64TruncSatF64U { .. } => 0xa43800f9e4975aff,
+                    Instr::I32Extend8S { .. } => 0xdecfc0dc5cb809af,
+                    Instr::I32Extend16S { .. } => 0xcdf6bb7756026125,
+                    Instr::I64Extend8S { .. } => 0xb906176cee2380bf,
+                    Instr::I64Extend16S { .. } => 0xf0382669ed7a55f1,
+                    Instr::I64Extend32S { .. } => 0xb61b2de5652d06e9,
+                    Instr::F32DemoteF64 { .. } => 0xbf82e5dd4495233b,
+                    Instr::F64PromoteF32 { .. } => 0xf42a79d7ed7c17c3,
+                    Instr::F32ConvertI32S { .. } => 0x9e65030287165e29,
+                    Instr::F32ConvertI32U { .. } => 0xe244f0acd2209f0b,
+                    Instr::F32ConvertI64S { .. } => 0xd007d6d9333c7405,
+                    Instr::F32ConvertI64U { .. } => 0xf31a7af87a7b7f61,
+                    Instr::F64ConvertI32S { .. } => 0xbef1a0dfa7540b4d,
+                    Instr::F64ConvertI32U { .. } => 0xa168200e59e18dcd,
+                    Instr::F64ConvertI64S { .. } => 0xb3a2d5946ee565e3,
+                    Instr::F64ConvertI64U { .. } => 0x92ad2f2873e8fbc5,
+                    _ => 0xf360371a61b48ca1,
                 };
                 self.update_runtime_signature(&mut store.inner, instr_prime);
             }
             match instr {
-                Instr::TableIdx(_)
-                | Instr::DataSegmentIdx(_)
-                | Instr::ElementSegmentIdx(_)
-                | Instr::Const32(_)
-                | Instr::I64Const32(_)
-                | Instr::F64Const32(_)
-                | Instr::Register(_)
-                | Instr::Register2(_)
-                | Instr::Register3(_)
-                | Instr::RegisterList(_)
-                | Instr::CallIndirectParams(_)
-                | Instr::CallIndirectParamsImm16(_) => self.invalid_instruction_word()?,
-                Instr::Trap(trap_code) => self.execute_trap(trap_code)?,
-                Instr::ConsumeFuel(block_fuel) => {
+                Instr::Trap { trap_code } => self.execute_trap(trap_code)?,
+                Instr::ConsumeFuel { block_fuel } => {
                     self.execute_consume_fuel(&mut store.inner, block_fuel)?
                 }
                 Instr::Return => {
@@ -691,76 +627,219 @@ impl<'engine> Executor<'engine> {
                     ))
                 }
                 Instr::Branch { offset } => self.execute_branch(offset),
-                Instr::BranchTable { index, len_targets } => {
-                    self.execute_branch_table(index, len_targets)
+                Instr::BranchTable0 { index, len_targets } => {
+                    self.execute_branch_table_0(index, len_targets)
+                }
+                Instr::BranchTable1 { index, len_targets } => {
+                    self.execute_branch_table_1(index, len_targets)
+                }
+                Instr::BranchTable2 { index, len_targets } => {
+                    self.execute_branch_table_2(index, len_targets)
+                }
+                Instr::BranchTable3 { index, len_targets } => {
+                    self.execute_branch_table_3(index, len_targets)
+                }
+                Instr::BranchTableSpan { index, len_targets } => {
+                    self.execute_branch_table_span(index, len_targets)
+                }
+                Instr::BranchTableMany { index, len_targets } => {
+                    self.execute_branch_table_many(index, len_targets)
                 }
                 Instr::BranchCmpFallback { lhs, rhs, params } => {
                     self.execute_branch_cmp_fallback(lhs, rhs, params)
                 }
-                Instr::BranchI32And(instr) => self.execute_branch_i32_and(instr),
-                Instr::BranchI32AndImm(instr) => self.execute_branch_i32_and_imm(instr),
-                Instr::BranchI32Or(instr) => self.execute_branch_i32_or(instr),
-                Instr::BranchI32OrImm(instr) => self.execute_branch_i32_or_imm(instr),
-                Instr::BranchI32Xor(instr) => self.execute_branch_i32_xor(instr),
-                Instr::BranchI32XorImm(instr) => self.execute_branch_i32_xor_imm(instr),
-                Instr::BranchI32AndEqz(instr) => self.execute_branch_i32_and_eqz(instr),
-                Instr::BranchI32AndEqzImm(instr) => self.execute_branch_i32_and_eqz_imm(instr),
-                Instr::BranchI32OrEqz(instr) => self.execute_branch_i32_or_eqz(instr),
-                Instr::BranchI32OrEqzImm(instr) => self.execute_branch_i32_or_eqz_imm(instr),
-                Instr::BranchI32XorEqz(instr) => self.execute_branch_i32_xor_eqz(instr),
-                Instr::BranchI32XorEqzImm(instr) => self.execute_branch_i32_xor_eqz_imm(instr),
-                Instr::BranchI32Eq(instr) => self.execute_branch_i32_eq(instr),
-                Instr::BranchI32EqImm(instr) => self.execute_branch_i32_eq_imm(instr),
-                Instr::BranchI32Ne(instr) => self.execute_branch_i32_ne(instr),
-                Instr::BranchI32NeImm(instr) => self.execute_branch_i32_ne_imm(instr),
-                Instr::BranchI32LtS(instr) => self.execute_branch_i32_lt_s(instr),
-                Instr::BranchI32LtSImm(instr) => self.execute_branch_i32_lt_s_imm(instr),
-                Instr::BranchI32LtU(instr) => self.execute_branch_i32_lt_u(instr),
-                Instr::BranchI32LtUImm(instr) => self.execute_branch_i32_lt_u_imm(instr),
-                Instr::BranchI32LeS(instr) => self.execute_branch_i32_le_s(instr),
-                Instr::BranchI32LeSImm(instr) => self.execute_branch_i32_le_s_imm(instr),
-                Instr::BranchI32LeU(instr) => self.execute_branch_i32_le_u(instr),
-                Instr::BranchI32LeUImm(instr) => self.execute_branch_i32_le_u_imm(instr),
-                Instr::BranchI32GtS(instr) => self.execute_branch_i32_gt_s(instr),
-                Instr::BranchI32GtSImm(instr) => self.execute_branch_i32_gt_s_imm(instr),
-                Instr::BranchI32GtU(instr) => self.execute_branch_i32_gt_u(instr),
-                Instr::BranchI32GtUImm(instr) => self.execute_branch_i32_gt_u_imm(instr),
-                Instr::BranchI32GeS(instr) => self.execute_branch_i32_ge_s(instr),
-                Instr::BranchI32GeSImm(instr) => self.execute_branch_i32_ge_s_imm(instr),
-                Instr::BranchI32GeU(instr) => self.execute_branch_i32_ge_u(instr),
-                Instr::BranchI32GeUImm(instr) => self.execute_branch_i32_ge_u_imm(instr),
-                Instr::BranchI64Eq(instr) => self.execute_branch_i64_eq(instr),
-                Instr::BranchI64EqImm(instr) => self.execute_branch_i64_eq_imm(instr),
-                Instr::BranchI64Ne(instr) => self.execute_branch_i64_ne(instr),
-                Instr::BranchI64NeImm(instr) => self.execute_branch_i64_ne_imm(instr),
-                Instr::BranchI64LtS(instr) => self.execute_branch_i64_lt_s(instr),
-                Instr::BranchI64LtSImm(instr) => self.execute_branch_i64_lt_s_imm(instr),
-                Instr::BranchI64LtU(instr) => self.execute_branch_i64_lt_u(instr),
-                Instr::BranchI64LtUImm(instr) => self.execute_branch_i64_lt_u_imm(instr),
-                Instr::BranchI64LeS(instr) => self.execute_branch_i64_le_s(instr),
-                Instr::BranchI64LeSImm(instr) => self.execute_branch_i64_le_s_imm(instr),
-                Instr::BranchI64LeU(instr) => self.execute_branch_i64_le_u(instr),
-                Instr::BranchI64LeUImm(instr) => self.execute_branch_i64_le_u_imm(instr),
-                Instr::BranchI64GtS(instr) => self.execute_branch_i64_gt_s(instr),
-                Instr::BranchI64GtSImm(instr) => self.execute_branch_i64_gt_s_imm(instr),
-                Instr::BranchI64GtU(instr) => self.execute_branch_i64_gt_u(instr),
-                Instr::BranchI64GtUImm(instr) => self.execute_branch_i64_gt_u_imm(instr),
-                Instr::BranchI64GeS(instr) => self.execute_branch_i64_ge_s(instr),
-                Instr::BranchI64GeSImm(instr) => self.execute_branch_i64_ge_s_imm(instr),
-                Instr::BranchI64GeU(instr) => self.execute_branch_i64_ge_u(instr),
-                Instr::BranchI64GeUImm(instr) => self.execute_branch_i64_ge_u_imm(instr),
-                Instr::BranchF32Eq(instr) => self.execute_branch_f32_eq(instr),
-                Instr::BranchF32Ne(instr) => self.execute_branch_f32_ne(instr),
-                Instr::BranchF32Lt(instr) => self.execute_branch_f32_lt(instr),
-                Instr::BranchF32Le(instr) => self.execute_branch_f32_le(instr),
-                Instr::BranchF32Gt(instr) => self.execute_branch_f32_gt(instr),
-                Instr::BranchF32Ge(instr) => self.execute_branch_f32_ge(instr),
-                Instr::BranchF64Eq(instr) => self.execute_branch_f64_eq(instr),
-                Instr::BranchF64Ne(instr) => self.execute_branch_f64_ne(instr),
-                Instr::BranchF64Lt(instr) => self.execute_branch_f64_lt(instr),
-                Instr::BranchF64Le(instr) => self.execute_branch_f64_le(instr),
-                Instr::BranchF64Gt(instr) => self.execute_branch_f64_gt(instr),
-                Instr::BranchF64Ge(instr) => self.execute_branch_f64_ge(instr),
+                Instr::BranchI32And { lhs, rhs, offset } => {
+                    self.execute_branch_i32_and(lhs, rhs, offset)
+                }
+                Instr::BranchI32AndImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_and_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32Or { lhs, rhs, offset } => {
+                    self.execute_branch_i32_or(lhs, rhs, offset)
+                }
+                Instr::BranchI32OrImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_or_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32Xor { lhs, rhs, offset } => {
+                    self.execute_branch_i32_xor(lhs, rhs, offset)
+                }
+                Instr::BranchI32XorImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_xor_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32AndEqz { lhs, rhs, offset } => {
+                    self.execute_branch_i32_and_eqz(lhs, rhs, offset)
+                }
+                Instr::BranchI32AndEqzImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_and_eqz_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32OrEqz { lhs, rhs, offset } => {
+                    self.execute_branch_i32_or_eqz(lhs, rhs, offset)
+                }
+                Instr::BranchI32OrEqzImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_or_eqz_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32XorEqz { lhs, rhs, offset } => {
+                    self.execute_branch_i32_xor_eqz(lhs, rhs, offset)
+                }
+                Instr::BranchI32XorEqzImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_xor_eqz_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32Eq { lhs, rhs, offset } => {
+                    self.execute_branch_i32_eq(lhs, rhs, offset)
+                }
+                Instr::BranchI32EqImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_eq_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32Ne { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ne(lhs, rhs, offset)
+                }
+                Instr::BranchI32NeImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ne_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32LtS { lhs, rhs, offset } => {
+                    self.execute_branch_i32_lt_s(lhs, rhs, offset)
+                }
+                Instr::BranchI32LtSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_lt_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32LtU { lhs, rhs, offset } => {
+                    self.execute_branch_i32_lt_u(lhs, rhs, offset)
+                }
+                Instr::BranchI32LtUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_lt_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32LeS { lhs, rhs, offset } => {
+                    self.execute_branch_i32_le_s(lhs, rhs, offset)
+                }
+                Instr::BranchI32LeSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_le_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32LeU { lhs, rhs, offset } => {
+                    self.execute_branch_i32_le_u(lhs, rhs, offset)
+                }
+                Instr::BranchI32LeUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_le_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32GtS { lhs, rhs, offset } => {
+                    self.execute_branch_i32_gt_s(lhs, rhs, offset)
+                }
+                Instr::BranchI32GtSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_gt_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32GtU { lhs, rhs, offset } => {
+                    self.execute_branch_i32_gt_u(lhs, rhs, offset)
+                }
+                Instr::BranchI32GtUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_gt_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32GeS { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ge_s(lhs, rhs, offset)
+                }
+                Instr::BranchI32GeSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ge_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI32GeU { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ge_u(lhs, rhs, offset)
+                }
+                Instr::BranchI32GeUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i32_ge_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64Eq { lhs, rhs, offset } => {
+                    self.execute_branch_i64_eq(lhs, rhs, offset)
+                }
+                Instr::BranchI64EqImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_eq_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64Ne { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ne(lhs, rhs, offset)
+                }
+                Instr::BranchI64NeImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ne_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64LtS { lhs, rhs, offset } => {
+                    self.execute_branch_i64_lt_s(lhs, rhs, offset)
+                }
+                Instr::BranchI64LtSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_lt_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64LtU { lhs, rhs, offset } => {
+                    self.execute_branch_i64_lt_u(lhs, rhs, offset)
+                }
+                Instr::BranchI64LtUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_lt_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64LeS { lhs, rhs, offset } => {
+                    self.execute_branch_i64_le_s(lhs, rhs, offset)
+                }
+                Instr::BranchI64LeSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_le_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64LeU { lhs, rhs, offset } => {
+                    self.execute_branch_i64_le_u(lhs, rhs, offset)
+                }
+                Instr::BranchI64LeUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_le_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64GtS { lhs, rhs, offset } => {
+                    self.execute_branch_i64_gt_s(lhs, rhs, offset)
+                }
+                Instr::BranchI64GtSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_gt_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64GtU { lhs, rhs, offset } => {
+                    self.execute_branch_i64_gt_u(lhs, rhs, offset)
+                }
+                Instr::BranchI64GtUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_gt_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64GeS { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ge_s(lhs, rhs, offset)
+                }
+                Instr::BranchI64GeSImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ge_s_imm(lhs, rhs, offset)
+                }
+                Instr::BranchI64GeU { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ge_u(lhs, rhs, offset)
+                }
+                Instr::BranchI64GeUImm { lhs, rhs, offset } => {
+                    self.execute_branch_i64_ge_u_imm(lhs, rhs, offset)
+                }
+                Instr::BranchF32Eq { lhs, rhs, offset } => {
+                    self.execute_branch_f32_eq(lhs, rhs, offset)
+                }
+                Instr::BranchF32Ne { lhs, rhs, offset } => {
+                    self.execute_branch_f32_ne(lhs, rhs, offset)
+                }
+                Instr::BranchF32Lt { lhs, rhs, offset } => {
+                    self.execute_branch_f32_lt(lhs, rhs, offset)
+                }
+                Instr::BranchF32Le { lhs, rhs, offset } => {
+                    self.execute_branch_f32_le(lhs, rhs, offset)
+                }
+                Instr::BranchF32Gt { lhs, rhs, offset } => {
+                    self.execute_branch_f32_gt(lhs, rhs, offset)
+                }
+                Instr::BranchF32Ge { lhs, rhs, offset } => {
+                    self.execute_branch_f32_ge(lhs, rhs, offset)
+                }
+                Instr::BranchF64Eq { lhs, rhs, offset } => {
+                    self.execute_branch_f64_eq(lhs, rhs, offset)
+                }
+                Instr::BranchF64Ne { lhs, rhs, offset } => {
+                    self.execute_branch_f64_ne(lhs, rhs, offset)
+                }
+                Instr::BranchF64Lt { lhs, rhs, offset } => {
+                    self.execute_branch_f64_lt(lhs, rhs, offset)
+                }
+                Instr::BranchF64Le { lhs, rhs, offset } => {
+                    self.execute_branch_f64_le(lhs, rhs, offset)
+                }
+                Instr::BranchF64Gt { lhs, rhs, offset } => {
+                    self.execute_branch_f64_gt(lhs, rhs, offset)
+                }
+                Instr::BranchF64Ge { lhs, rhs, offset } => {
+                    self.execute_branch_f64_ge(lhs, rhs, offset)
+                }
                 Instr::Copy { result, value } => self.execute_copy(result, value),
                 Instr::Copy2 { results, values } => self.execute_copy_2(results, values),
                 Instr::CopyImm32 { result, value } => self.execute_copy_imm32(result, value),
@@ -781,10 +860,10 @@ impl<'engine> Executor<'engine> {
                     self.execute_copy_many_non_overlapping(results, values)
                 }
                 Instr::ReturnCallInternal0 { func } => {
-                    self.execute_return_call_internal_0(&mut store.inner, func)?
+                    self.execute_return_call_internal_0(&mut store.inner, EngineFunc::from(func))?
                 }
                 Instr::ReturnCallInternal { func } => {
-                    self.execute_return_call_internal(&mut store.inner, func)?
+                    self.execute_return_call_internal(&mut store.inner, EngineFunc::from(func))?
                 }
                 Instr::ReturnCallImported0 { func } => {
                     self.execute_return_call_imported_0::<T>(store, func)?
@@ -795,14 +874,20 @@ impl<'engine> Executor<'engine> {
                 Instr::ReturnCallIndirect0 { func_type } => {
                     self.execute_return_call_indirect_0::<T>(store, func_type)?
                 }
+                Instr::ReturnCallIndirect0Imm16 { func_type } => {
+                    self.execute_return_call_indirect_0_imm16::<T>(store, func_type)?
+                }
                 Instr::ReturnCallIndirect { func_type } => {
                     self.execute_return_call_indirect::<T>(store, func_type)?
                 }
+                Instr::ReturnCallIndirectImm16 { func_type } => {
+                    self.execute_return_call_indirect_imm16::<T>(store, func_type)?
+                }
                 Instr::CallInternal0 { results, func } => {
-                    self.execute_call_internal_0(&mut store.inner, results, func)?
+                    self.execute_call_internal_0(&mut store.inner, results, EngineFunc::from(func))?
                 }
                 Instr::CallInternal { results, func } => {
-                    self.execute_call_internal(&mut store.inner, results, func)?
+                    self.execute_call_internal(&mut store.inner, results, EngineFunc::from(func))?
                 }
                 Instr::CallImported0 { results, func } => {
                     self.execute_call_imported_0::<T>(store, results, func)?
@@ -813,31 +898,33 @@ impl<'engine> Executor<'engine> {
                 Instr::CallIndirect0 { results, func_type } => {
                     self.execute_call_indirect_0::<T>(store, results, func_type)?
                 }
+                Instr::CallIndirect0Imm16 { results, func_type } => {
+                    self.execute_call_indirect_0_imm16::<T>(store, results, func_type)?
+                }
                 Instr::CallIndirect { results, func_type } => {
                     self.execute_call_indirect::<T>(store, results, func_type)?
                 }
-                Instr::Select {
-                    result,
-                    condition,
-                    lhs,
-                } => self.execute_select(result, condition, lhs),
-                Instr::SelectRev {
-                    result,
-                    condition,
-                    rhs,
-                } => self.execute_select_rev(result, condition, rhs),
-                Instr::SelectImm32 {
-                    result_or_condition,
-                    lhs_or_rhs,
-                } => self.execute_select_imm32(result_or_condition, lhs_or_rhs),
-                Instr::SelectI64Imm32 {
-                    result_or_condition,
-                    lhs_or_rhs,
-                } => self.execute_select_i64imm32(result_or_condition, lhs_or_rhs),
-                Instr::SelectF64Imm32 {
-                    result_or_condition,
-                    lhs_or_rhs,
-                } => self.execute_select_f64imm32(result_or_condition, lhs_or_rhs),
+                Instr::CallIndirectImm16 { results, func_type } => {
+                    self.execute_call_indirect_imm16::<T>(store, results, func_type)?
+                }
+                Instr::Select { result, lhs } => self.execute_select(result, lhs),
+                Instr::SelectImm32Rhs { result, lhs } => self.execute_select_imm32_rhs(result, lhs),
+                Instr::SelectImm32Lhs { result, lhs } => self.execute_select_imm32_lhs(result, lhs),
+                Instr::SelectImm32 { result, lhs } => self.execute_select_imm32(result, lhs),
+                Instr::SelectI64Imm32Rhs { result, lhs } => {
+                    self.execute_select_i64imm32_rhs(result, lhs)
+                }
+                Instr::SelectI64Imm32Lhs { result, lhs } => {
+                    self.execute_select_i64imm32_lhs(result, lhs)
+                }
+                Instr::SelectI64Imm32 { result, lhs } => self.execute_select_i64imm32(result, lhs),
+                Instr::SelectF64Imm32Rhs { result, lhs } => {
+                    self.execute_select_f64imm32_rhs(result, lhs)
+                }
+                Instr::SelectF64Imm32Lhs { result, lhs } => {
+                    self.execute_select_f64imm32_lhs(result, lhs)
+                }
+                Instr::SelectF64Imm32 { result, lhs } => self.execute_select_f64imm32(result, lhs),
                 Instr::RefFunc { result, func } => self.execute_ref_func(result, func),
                 Instr::GlobalGet { result, global } => {
                     self.execute_global_get(&store.inner, result, global)
@@ -851,920 +938,1475 @@ impl<'engine> Executor<'engine> {
                 Instr::GlobalSetI64Imm16 { global, input } => {
                     self.execute_global_set_i64imm16(&mut store.inner, global, input)
                 }
-                Instr::I32Load(instr) => self.execute_i32_load(instr)?,
-                Instr::I32LoadAt(instr) => self.execute_i32_load_at(instr)?,
-                Instr::I32LoadOffset16(instr) => self.execute_i32_load_offset16(instr)?,
-                Instr::I64Load(instr) => self.execute_i64_load(instr)?,
-                Instr::I64LoadAt(instr) => self.execute_i64_load_at(instr)?,
-                Instr::I64LoadOffset16(instr) => self.execute_i64_load_offset16(instr)?,
-                Instr::F32Load(instr) => self.execute_f32_load(instr)?,
-                Instr::F32LoadAt(instr) => self.execute_f32_load_at(instr)?,
-                Instr::F32LoadOffset16(instr) => self.execute_f32_load_offset16(instr)?,
-                Instr::F64Load(instr) => self.execute_f64_load(instr)?,
-                Instr::F64LoadAt(instr) => self.execute_f64_load_at(instr)?,
-                Instr::F64LoadOffset16(instr) => self.execute_f64_load_offset16(instr)?,
-                Instr::I32Load8s(instr) => self.execute_i32_load8_s(instr)?,
-                Instr::I32Load8sAt(instr) => self.execute_i32_load8_s_at(instr)?,
-                Instr::I32Load8sOffset16(instr) => self.execute_i32_load8_s_offset16(instr)?,
-                Instr::I32Load8u(instr) => self.execute_i32_load8_u(instr)?,
-                Instr::I32Load8uAt(instr) => self.execute_i32_load8_u_at(instr)?,
-                Instr::I32Load8uOffset16(instr) => self.execute_i32_load8_u_offset16(instr)?,
-                Instr::I32Load16s(instr) => self.execute_i32_load16_s(instr)?,
-                Instr::I32Load16sAt(instr) => self.execute_i32_load16_s_at(instr)?,
-                Instr::I32Load16sOffset16(instr) => self.execute_i32_load16_s_offset16(instr)?,
-                Instr::I32Load16u(instr) => self.execute_i32_load16_u(instr)?,
-                Instr::I32Load16uAt(instr) => self.execute_i32_load16_u_at(instr)?,
-                Instr::I32Load16uOffset16(instr) => self.execute_i32_load16_u_offset16(instr)?,
-                Instr::I64Load8s(instr) => self.execute_i64_load8_s(instr)?,
-                Instr::I64Load8sAt(instr) => self.execute_i64_load8_s_at(instr)?,
-                Instr::I64Load8sOffset16(instr) => self.execute_i64_load8_s_offset16(instr)?,
-                Instr::I64Load8u(instr) => self.execute_i64_load8_u(instr)?,
-                Instr::I64Load8uAt(instr) => self.execute_i64_load8_u_at(instr)?,
-                Instr::I64Load8uOffset16(instr) => self.execute_i64_load8_u_offset16(instr)?,
-                Instr::I64Load16s(instr) => self.execute_i64_load16_s(instr)?,
-                Instr::I64Load16sAt(instr) => self.execute_i64_load16_s_at(instr)?,
-                Instr::I64Load16sOffset16(instr) => self.execute_i64_load16_s_offset16(instr)?,
-                Instr::I64Load16u(instr) => self.execute_i64_load16_u(instr)?,
-                Instr::I64Load16uAt(instr) => self.execute_i64_load16_u_at(instr)?,
-                Instr::I64Load16uOffset16(instr) => self.execute_i64_load16_u_offset16(instr)?,
-                Instr::I64Load32s(instr) => self.execute_i64_load32_s(instr)?,
-                Instr::I64Load32sAt(instr) => self.execute_i64_load32_s_at(instr)?,
-                Instr::I64Load32sOffset16(instr) => self.execute_i64_load32_s_offset16(instr)?,
-                Instr::I64Load32u(instr) => self.execute_i64_load32_u(instr)?,
-                Instr::I64Load32uAt(instr) => self.execute_i64_load32_u_at(instr)?,
-                Instr::I64Load32uOffset16(instr) => self.execute_i64_load32_u_offset16(instr)?,
-                Instr::I32Store(instr) => self.execute_i32_store(instr)?,
-                Instr::I32StoreOffset16(instr) => self.execute_i32_store_offset16(instr)?,
-                Instr::I32StoreOffset16Imm16(instr) => {
-                    self.execute_i32_store_offset16_imm16(instr)?
+                Instr::I32Load { result, memory } => {
+                    self.execute_i32_load(&store.inner, result, memory)?
                 }
-                Instr::I32StoreAt(instr) => self.execute_i32_store_at(instr)?,
-                Instr::I32StoreAtImm16(instr) => self.execute_i32_store_at_imm16(instr)?,
-                Instr::I32Store8(instr) => self.execute_i32_store8(instr)?,
-                Instr::I32Store8Offset16(instr) => self.execute_i32_store8_offset16(instr)?,
-                Instr::I32Store8Offset16Imm(instr) => {
-                    self.execute_i32_store8_offset16_imm(instr)?
+                Instr::I32LoadAt { result, address } => {
+                    self.execute_i32_load_at(&store.inner, result, address)?
                 }
-                Instr::I32Store8At(instr) => self.execute_i32_store8_at(instr)?,
-                Instr::I32Store8AtImm(instr) => self.execute_i32_store8_at_imm(instr)?,
-                Instr::I32Store16(instr) => self.execute_i32_store16(instr)?,
-                Instr::I32Store16Offset16(instr) => self.execute_i32_store16_offset16(instr)?,
-                Instr::I32Store16Offset16Imm(instr) => {
-                    self.execute_i32_store16_offset16_imm(instr)?
+                Instr::I32LoadOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i32_load_offset16(result, ptr, offset)?,
+                Instr::I64Load { result, memory } => {
+                    self.execute_i64_load(&store.inner, result, memory)?
                 }
-                Instr::I32Store16At(instr) => self.execute_i32_store16_at(instr)?,
-                Instr::I32Store16AtImm(instr) => self.execute_i32_store16_at_imm(instr)?,
-                Instr::I64Store(instr) => self.execute_i64_store(instr)?,
-                Instr::I64StoreOffset16(instr) => self.execute_i64_store_offset16(instr)?,
-                Instr::I64StoreOffset16Imm16(instr) => {
-                    self.execute_i64_store_offset16_imm16(instr)?
+                Instr::I64LoadAt { result, address } => {
+                    self.execute_i64_load_at(&store.inner, result, address)?
                 }
-                Instr::I64StoreAt(instr) => self.execute_i64_store_at(instr)?,
-                Instr::I64StoreAtImm16(instr) => self.execute_i64_store_at_imm16(instr)?,
-                Instr::I64Store8(instr) => self.execute_i64_store8(instr)?,
-                Instr::I64Store8Offset16(instr) => self.execute_i64_store8_offset16(instr)?,
-                Instr::I64Store8Offset16Imm(instr) => {
-                    self.execute_i64_store8_offset16_imm(instr)?
+                Instr::I64LoadOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load_offset16(result, ptr, offset)?,
+                Instr::F32Load { result, memory } => {
+                    self.execute_f32_load(&store.inner, result, memory)?
                 }
-                Instr::I64Store8At(instr) => self.execute_i64_store8_at(instr)?,
-                Instr::I64Store8AtImm(instr) => self.execute_i64_store8_at_imm(instr)?,
-                Instr::I64Store16(instr) => self.execute_i64_store16(instr)?,
-                Instr::I64Store16Offset16(instr) => self.execute_i64_store16_offset16(instr)?,
-                Instr::I64Store16Offset16Imm(instr) => {
-                    self.execute_i64_store16_offset16_imm(instr)?
+                Instr::F32LoadAt { result, address } => {
+                    self.execute_f32_load_at(&store.inner, result, address)?
                 }
-                Instr::I64Store16At(instr) => self.execute_i64_store16_at(instr)?,
-                Instr::I64Store16AtImm(instr) => self.execute_i64_store16_at_imm(instr)?,
-                Instr::I64Store32(instr) => self.execute_i64_store32(instr)?,
-                Instr::I64Store32Offset16(instr) => self.execute_i64_store32_offset16(instr)?,
-                Instr::I64Store32Offset16Imm16(instr) => {
-                    self.execute_i64_store32_offset16_imm16(instr)?
+                Instr::F32LoadOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_f32_load_offset16(result, ptr, offset)?,
+                Instr::F64Load { result, memory } => {
+                    self.execute_f64_load(&store.inner, result, memory)?
                 }
-                Instr::I64Store32At(instr) => self.execute_i64_store32_at(instr)?,
-                Instr::I64Store32AtImm16(instr) => self.execute_i64_store32_at_imm16(instr)?,
-                Instr::F32Store(instr) => self.execute_f32_store(instr)?,
-                Instr::F32StoreOffset16(instr) => self.execute_f32_store_offset16(instr)?,
-                Instr::F32StoreAt(instr) => self.execute_f32_store_at(instr)?,
-                Instr::F64Store(instr) => self.execute_f64_store(instr)?,
-                Instr::F64StoreOffset16(instr) => self.execute_f64_store_offset16(instr)?,
-                Instr::F64StoreAt(instr) => self.execute_f64_store_at(instr)?,
-                Instr::I32Eq(instr) => self.execute_i32_eq(
+                Instr::F64LoadAt { result, address } => {
+                    self.execute_f64_load_at(&store.inner, result, address)?
+                }
+                Instr::F64LoadOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_f64_load_offset16(result, ptr, offset)?,
+                Instr::I32Load8s { result, memory } => {
+                    self.execute_i32_load8_s(&store.inner, result, memory)?
+                }
+                Instr::I32Load8sAt { result, address } => {
+                    self.execute_i32_load8_s_at(&store.inner, result, address)?
+                }
+                Instr::I32Load8sOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i32_load8_s_offset16(result, ptr, offset)?,
+                Instr::I32Load8u { result, memory } => {
+                    self.execute_i32_load8_u(&store.inner, result, memory)?
+                }
+                Instr::I32Load8uAt { result, address } => {
+                    self.execute_i32_load8_u_at(&store.inner, result, address)?
+                }
+                Instr::I32Load8uOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i32_load8_u_offset16(result, ptr, offset)?,
+                Instr::I32Load16s { result, memory } => {
+                    self.execute_i32_load16_s(&store.inner, result, memory)?
+                }
+                Instr::I32Load16sAt { result, address } => {
+                    self.execute_i32_load16_s_at(&store.inner, result, address)?
+                }
+                Instr::I32Load16sOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i32_load16_s_offset16(result, ptr, offset)?,
+                Instr::I32Load16u { result, memory } => {
+                    self.execute_i32_load16_u(&store.inner, result, memory)?
+                }
+                Instr::I32Load16uAt { result, address } => {
+                    self.execute_i32_load16_u_at(&store.inner, result, address)?
+                }
+                Instr::I32Load16uOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i32_load16_u_offset16(result, ptr, offset)?,
+                Instr::I64Load8s { result, memory } => {
+                    self.execute_i64_load8_s(&store.inner, result, memory)?
+                }
+                Instr::I64Load8sAt { result, address } => {
+                    self.execute_i64_load8_s_at(&store.inner, result, address)?
+                }
+                Instr::I64Load8sOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load8_s_offset16(result, ptr, offset)?,
+                Instr::I64Load8u { result, memory } => {
+                    self.execute_i64_load8_u(&store.inner, result, memory)?
+                }
+                Instr::I64Load8uAt { result, address } => {
+                    self.execute_i64_load8_u_at(&store.inner, result, address)?
+                }
+                Instr::I64Load8uOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load8_u_offset16(result, ptr, offset)?,
+                Instr::I64Load16s { result, memory } => {
+                    self.execute_i64_load16_s(&store.inner, result, memory)?
+                }
+                Instr::I64Load16sAt { result, address } => {
+                    self.execute_i64_load16_s_at(&store.inner, result, address)?
+                }
+                Instr::I64Load16sOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load16_s_offset16(result, ptr, offset)?,
+                Instr::I64Load16u { result, memory } => {
+                    self.execute_i64_load16_u(&store.inner, result, memory)?
+                }
+                Instr::I64Load16uAt { result, address } => {
+                    self.execute_i64_load16_u_at(&store.inner, result, address)?
+                }
+                Instr::I64Load16uOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load16_u_offset16(result, ptr, offset)?,
+                Instr::I64Load32s { result, memory } => {
+                    self.execute_i64_load32_s(&store.inner, result, memory)?
+                }
+                Instr::I64Load32sAt { result, address } => {
+                    self.execute_i64_load32_s_at(&store.inner, result, address)?
+                }
+                Instr::I64Load32sOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load32_s_offset16(result, ptr, offset)?,
+                Instr::I64Load32u { result, memory } => {
+                    self.execute_i64_load32_u(&store.inner, result, memory)?
+                }
+                Instr::I64Load32uAt { result, address } => {
+                    self.execute_i64_load32_u_at(&store.inner, result, address)?
+                }
+                Instr::I64Load32uOffset16 {
+                    result,
+                    ptr,
+                    offset,
+                } => self.execute_i64_load32_u_offset16(result, ptr, offset)?,
+                Instr::I32Store { ptr, memory } => {
+                    self.execute_i32_store(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32StoreImm16 { ptr, memory } => {
+                    self.execute_i32_store_imm16(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32StoreOffset16 { ptr, offset, value } => {
+                    self.execute_i32_store_offset16(ptr, offset, value)?
+                }
+                Instr::I32StoreOffset16Imm16 { ptr, offset, value } => {
+                    self.execute_i32_store_offset16_imm16(ptr, offset, value)?
+                }
+                Instr::I32StoreAt { address, value } => {
+                    self.execute_i32_store_at(&mut store.inner, address, value)?
+                }
+                Instr::I32StoreAtImm16 { address, value } => {
+                    self.execute_i32_store_at_imm16(&mut store.inner, address, value)?
+                }
+                Instr::I32Store8 { ptr, memory } => {
+                    self.execute_i32_store8(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32Store8Imm { ptr, memory } => {
+                    self.execute_i32_store8_imm(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32Store8Offset16 { ptr, offset, value } => {
+                    self.execute_i32_store8_offset16(ptr, offset, value)?
+                }
+                Instr::I32Store8Offset16Imm { ptr, offset, value } => {
+                    self.execute_i32_store8_offset16_imm(ptr, offset, value)?
+                }
+                Instr::I32Store8At { address, value } => {
+                    self.execute_i32_store8_at(&mut store.inner, address, value)?
+                }
+                Instr::I32Store8AtImm { address, value } => {
+                    self.execute_i32_store8_at_imm(&mut store.inner, address, value)?
+                }
+                Instr::I32Store16 { ptr, memory } => {
+                    self.execute_i32_store16(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32Store16Imm { ptr, memory } => {
+                    self.execute_i32_store16_imm(&mut store.inner, ptr, memory)?
+                }
+                Instr::I32Store16Offset16 { ptr, offset, value } => {
+                    self.execute_i32_store16_offset16(ptr, offset, value)?
+                }
+                Instr::I32Store16Offset16Imm { ptr, offset, value } => {
+                    self.execute_i32_store16_offset16_imm(ptr, offset, value)?
+                }
+                Instr::I32Store16At { address, value } => {
+                    self.execute_i32_store16_at(&mut store.inner, address, value)?
+                }
+                Instr::I32Store16AtImm { address, value } => {
+                    self.execute_i32_store16_at_imm(&mut store.inner, address, value)?
+                }
+                Instr::I64Store { ptr, memory } => {
+                    self.execute_i64_store(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64StoreImm16 { ptr, memory } => {
+                    self.execute_i64_store_imm16(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64StoreOffset16 { ptr, offset, value } => {
+                    self.execute_i64_store_offset16(ptr, offset, value)?
+                }
+                Instr::I64StoreOffset16Imm16 { ptr, offset, value } => {
+                    self.execute_i64_store_offset16_imm16(ptr, offset, value)?
+                }
+                Instr::I64StoreAt { address, value } => {
+                    self.execute_i64_store_at(&mut store.inner, address, value)?
+                }
+                Instr::I64StoreAtImm16 { address, value } => {
+                    self.execute_i64_store_at_imm16(&mut store.inner, address, value)?
+                }
+                Instr::I64Store8 { ptr, memory } => {
+                    self.execute_i64_store8(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store8Imm { ptr, memory } => {
+                    self.execute_i64_store8_imm(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store8Offset16 { ptr, offset, value } => {
+                    self.execute_i64_store8_offset16(ptr, offset, value)?
+                }
+                Instr::I64Store8Offset16Imm { ptr, offset, value } => {
+                    self.execute_i64_store8_offset16_imm(ptr, offset, value)?
+                }
+                Instr::I64Store8At { address, value } => {
+                    self.execute_i64_store8_at(&mut store.inner, address, value)?
+                }
+                Instr::I64Store8AtImm { address, value } => {
+                    self.execute_i64_store8_at_imm(&mut store.inner, address, value)?
+                }
+                Instr::I64Store16 { ptr, memory } => {
+                    self.execute_i64_store16(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store16Imm { ptr, memory } => {
+                    self.execute_i64_store16_imm(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store16Offset16 { ptr, offset, value } => {
+                    self.execute_i64_store16_offset16(ptr, offset, value)?
+                }
+                Instr::I64Store16Offset16Imm { ptr, offset, value } => {
+                    self.execute_i64_store16_offset16_imm(ptr, offset, value)?
+                }
+                Instr::I64Store16At { address, value } => {
+                    self.execute_i64_store16_at(&mut store.inner, address, value)?
+                }
+                Instr::I64Store16AtImm { address, value } => {
+                    self.execute_i64_store16_at_imm(&mut store.inner, address, value)?
+                }
+                Instr::I64Store32 { ptr, memory } => {
+                    self.execute_i64_store32(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store32Imm16 { ptr, memory } => {
+                    self.execute_i64_store32_imm16(&mut store.inner, ptr, memory)?
+                }
+                Instr::I64Store32Offset16 { ptr, offset, value } => {
+                    self.execute_i64_store32_offset16(ptr, offset, value)?
+                }
+                Instr::I64Store32Offset16Imm16 { ptr, offset, value } => {
+                    self.execute_i64_store32_offset16_imm16(ptr, offset, value)?
+                }
+                Instr::I64Store32At { address, value } => {
+                    self.execute_i64_store32_at(&mut store.inner, address, value)?
+                }
+                Instr::I64Store32AtImm16 { address, value } => {
+                    self.execute_i64_store32_at_imm16(&mut store.inner, address, value)?
+                }
+                Instr::F32Store { ptr, memory } => {
+                    self.execute_f32_store(&mut store.inner, ptr, memory)?
+                }
+                Instr::F32StoreOffset16 { ptr, offset, value } => {
+                    self.execute_f32_store_offset16(ptr, offset, value)?
+                }
+                Instr::F32StoreAt { address, value } => {
+                    self.execute_f32_store_at(&mut store.inner, address, value)?
+                }
+                Instr::F64Store { ptr, memory } => {
+                    self.execute_f64_store(&mut store.inner, ptr, memory)?
+                }
+                Instr::F64StoreOffset16 { ptr, offset, value } => {
+                    self.execute_f64_store_offset16(ptr, offset, value)?
+                }
+                Instr::F64StoreAt { address, value } => {
+                    self.execute_f64_store_at(&mut store.inner, address, value)?
+                }
+                Instr::I32Eq { result, lhs, rhs } => self.execute_i32_eq(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32EqImm16(instr) => self.execute_i32_eq_imm16(
+                Instr::I32EqImm16 { result, lhs, rhs } => self.execute_i32_eq_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Ne(instr) => self.execute_i32_ne(
+                Instr::I32Ne { result, lhs, rhs } => self.execute_i32_ne(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32NeImm16(instr) => self.execute_i32_ne_imm16(
+                Instr::I32NeImm16 { result, lhs, rhs } => self.execute_i32_ne_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LtS(instr) => self.execute_i32_lt_s(
+                Instr::I32LtS { result, lhs, rhs } => self.execute_i32_lt_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LtSImm16(instr) => self.execute_i32_lt_s_imm16(
+                Instr::I32LtSImm16 { result, lhs, rhs } => self.execute_i32_lt_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LtU(instr) => self.execute_i32_lt_u(
+                Instr::I32LtU { result, lhs, rhs } => self.execute_i32_lt_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LtUImm16(instr) => self.execute_i32_lt_u_imm16(
+                Instr::I32LtUImm16 { result, lhs, rhs } => self.execute_i32_lt_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LeS(instr) => self.execute_i32_le_s(
+                Instr::I32LeS { result, lhs, rhs } => self.execute_i32_le_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LeSImm16(instr) => self.execute_i32_le_s_imm16(
+                Instr::I32LeSImm16 { result, lhs, rhs } => self.execute_i32_le_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LeU(instr) => self.execute_i32_le_u(
+                Instr::I32LeU { result, lhs, rhs } => self.execute_i32_le_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32LeUImm16(instr) => self.execute_i32_le_u_imm16(
+                Instr::I32LeUImm16 { result, lhs, rhs } => self.execute_i32_le_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GtS(instr) => self.execute_i32_gt_s(
+                Instr::I32GtS { result, lhs, rhs } => self.execute_i32_gt_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GtSImm16(instr) => self.execute_i32_gt_s_imm16(
+                Instr::I32GtSImm16 { result, lhs, rhs } => self.execute_i32_gt_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GtU(instr) => self.execute_i32_gt_u(
+                Instr::I32GtU { result, lhs, rhs } => self.execute_i32_gt_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GtUImm16(instr) => self.execute_i32_gt_u_imm16(
+                Instr::I32GtUImm16 { result, lhs, rhs } => self.execute_i32_gt_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GeS(instr) => self.execute_i32_ge_s(
+                Instr::I32GeS { result, lhs, rhs } => self.execute_i32_ge_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GeSImm16(instr) => self.execute_i32_ge_s_imm16(
+                Instr::I32GeSImm16 { result, lhs, rhs } => self.execute_i32_ge_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GeU(instr) => self.execute_i32_ge_u(
+                Instr::I32GeU { result, lhs, rhs } => self.execute_i32_ge_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32GeUImm16(instr) => self.execute_i32_ge_u_imm16(
+                Instr::I32GeUImm16 { result, lhs, rhs } => self.execute_i32_ge_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Eq(instr) => self.execute_i64_eq(
+                Instr::I64Eq { result, lhs, rhs } => self.execute_i64_eq(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64EqImm16(instr) => self.execute_i64_eq_imm16(
+                Instr::I64EqImm16 { result, lhs, rhs } => self.execute_i64_eq_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Ne(instr) => self.execute_i64_ne(
+                Instr::I64Ne { result, lhs, rhs } => self.execute_i64_ne(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64NeImm16(instr) => self.execute_i64_ne_imm16(
+                Instr::I64NeImm16 { result, lhs, rhs } => self.execute_i64_ne_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LtS(instr) => self.execute_i64_lt_s(
+                Instr::I64LtS { result, lhs, rhs } => self.execute_i64_lt_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LtSImm16(instr) => self.execute_i64_lt_s_imm16(
+                Instr::I64LtSImm16 { result, lhs, rhs } => self.execute_i64_lt_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LtU(instr) => self.execute_i64_lt_u(
+                Instr::I64LtU { result, lhs, rhs } => self.execute_i64_lt_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LtUImm16(instr) => self.execute_i64_lt_u_imm16(
+                Instr::I64LtUImm16 { result, lhs, rhs } => self.execute_i64_lt_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LeS(instr) => self.execute_i64_le_s(
+                Instr::I64LeS { result, lhs, rhs } => self.execute_i64_le_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LeSImm16(instr) => self.execute_i64_le_s_imm16(
+                Instr::I64LeSImm16 { result, lhs, rhs } => self.execute_i64_le_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LeU(instr) => self.execute_i64_le_u(
+                Instr::I64LeU { result, lhs, rhs } => self.execute_i64_le_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64LeUImm16(instr) => self.execute_i64_le_u_imm16(
+                Instr::I64LeUImm16 { result, lhs, rhs } => self.execute_i64_le_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GtS(instr) => self.execute_i64_gt_s(
+                Instr::I64GtS { result, lhs, rhs } => self.execute_i64_gt_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GtSImm16(instr) => self.execute_i64_gt_s_imm16(
+                Instr::I64GtSImm16 { result, lhs, rhs } => self.execute_i64_gt_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GtU(instr) => self.execute_i64_gt_u(
+                Instr::I64GtU { result, lhs, rhs } => self.execute_i64_gt_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GtUImm16(instr) => self.execute_i64_gt_u_imm16(
+                Instr::I64GtUImm16 { result, lhs, rhs } => self.execute_i64_gt_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GeS(instr) => self.execute_i64_ge_s(
+                Instr::I64GeS { result, lhs, rhs } => self.execute_i64_ge_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GeSImm16(instr) => self.execute_i64_ge_s_imm16(
+                Instr::I64GeSImm16 { result, lhs, rhs } => self.execute_i64_ge_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GeU(instr) => self.execute_i64_ge_u(
+                Instr::I64GeU { result, lhs, rhs } => self.execute_i64_ge_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64GeUImm16(instr) => self.execute_i64_ge_u_imm16(
+                Instr::I64GeUImm16 { result, lhs, rhs } => self.execute_i64_ge_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Eq(instr) => self.execute_f32_eq(
+                Instr::F32Eq { result, lhs, rhs } => self.execute_f32_eq(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Ne(instr) => self.execute_f32_ne(
+                Instr::F32Ne { result, lhs, rhs } => self.execute_f32_ne(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Lt(instr) => self.execute_f32_lt(
+                Instr::F32Lt { result, lhs, rhs } => self.execute_f32_lt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Le(instr) => self.execute_f32_le(
+                Instr::F32Le { result, lhs, rhs } => self.execute_f32_le(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Gt(instr) => self.execute_f32_gt(
+                Instr::F32Gt { result, lhs, rhs } => self.execute_f32_gt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Ge(instr) => self.execute_f32_ge(
+                Instr::F32Ge { result, lhs, rhs } => self.execute_f32_ge(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Eq(instr) => self.execute_f64_eq(
+                Instr::F64Eq { result, lhs, rhs } => self.execute_f64_eq(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Ne(instr) => self.execute_f64_ne(
+                Instr::F64Ne { result, lhs, rhs } => self.execute_f64_ne(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Lt(instr) => self.execute_f64_lt(
+                Instr::F64Lt { result, lhs, rhs } => self.execute_f64_lt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Le(instr) => self.execute_f64_le(
+                Instr::F64Le { result, lhs, rhs } => self.execute_f64_le(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Gt(instr) => self.execute_f64_gt(
+                Instr::F64Gt { result, lhs, rhs } => self.execute_f64_gt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Ge(instr) => self.execute_f64_ge(
+                Instr::F64Ge { result, lhs, rhs } => self.execute_f64_ge(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Clz(instr) => self.execute_i32_clz(
+                Instr::I32Clz { result, input } => self.execute_i32_clz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32Ctz(instr) => self.execute_i32_ctz(
+                Instr::I32Ctz { result, input } => self.execute_i32_ctz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32Popcnt(instr) => self.execute_i32_popcnt(
+                Instr::I32Popcnt { result, input } => self.execute_i32_popcnt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32Add(instr) => self.execute_i32_add(
+                Instr::I32Add { result, lhs, rhs } => self.execute_i32_add(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32AddImm16(instr) => self.execute_i32_add_imm16(
+                Instr::I32AddImm16 { result, lhs, rhs } => self.execute_i32_add_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Sub(instr) => self.execute_i32_sub(
+                Instr::I32Sub { result, lhs, rhs } => self.execute_i32_sub(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32SubImm16Rev(instr) => self.execute_i32_sub_imm16_rev(
+                Instr::I32SubImm16Lhs { result, lhs, rhs } => self.execute_i32_sub_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Mul(instr) => self.execute_i32_mul(
+                Instr::I32Mul { result, lhs, rhs } => self.execute_i32_mul(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32MulImm16(instr) => self.execute_i32_mul_imm16(
+                Instr::I32MulImm16 { result, lhs, rhs } => self.execute_i32_mul_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32DivS(instr) => self.execute_i32_div_s(
+                Instr::I32DivS { result, lhs, rhs } => self.execute_i32_div_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32DivSImm16(instr) => self.execute_i32_div_s_imm16(
+                Instr::I32DivSImm16Rhs { result, lhs, rhs } => self.execute_i32_div_s_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32DivSImm16Rev(instr) => self.execute_i32_div_s_imm16_rev(
+                Instr::I32DivSImm16Lhs { result, lhs, rhs } => self.execute_i32_div_s_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32DivU(instr) => self.execute_i32_div_u(
+                Instr::I32DivU { result, lhs, rhs } => self.execute_i32_div_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32DivUImm16(instr) => self.execute_i32_div_u_imm16(
+                Instr::I32DivUImm16Rhs { result, lhs, rhs } => self.execute_i32_div_u_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32DivUImm16Rev(instr) => self.execute_i32_div_u_imm16_rev(
+                Instr::I32DivUImm16Lhs { result, lhs, rhs } => self.execute_i32_div_u_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32RemS(instr) => self.execute_i32_rem_s(
+                Instr::I32RemS { result, lhs, rhs } => self.execute_i32_rem_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32RemSImm16(instr) => self.execute_i32_rem_s_imm16(
+                Instr::I32RemSImm16Rhs { result, lhs, rhs } => self.execute_i32_rem_s_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32RemSImm16Rev(instr) => self.execute_i32_rem_s_imm16_rev(
+                Instr::I32RemSImm16Lhs { result, lhs, rhs } => self.execute_i32_rem_s_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32RemU(instr) => self.execute_i32_rem_u(
+                Instr::I32RemU { result, lhs, rhs } => self.execute_i32_rem_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32RemUImm16(instr) => self.execute_i32_rem_u_imm16(
+                Instr::I32RemUImm16Rhs { result, lhs, rhs } => self.execute_i32_rem_u_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32RemUImm16Rev(instr) => self.execute_i32_rem_u_imm16_rev(
+                Instr::I32RemUImm16Lhs { result, lhs, rhs } => self.execute_i32_rem_u_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I32And(instr) => self.execute_i32_and(
+                Instr::I32And { result, lhs, rhs } => self.execute_i32_and(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32AndEqz(instr) => self.execute_i32_and_eqz(
+                Instr::I32AndEqz { result, lhs, rhs } => self.execute_i32_and_eqz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32AndEqzImm16(instr) => self.execute_i32_and_eqz_imm16(
+                Instr::I32AndEqzImm16 { result, lhs, rhs } => self.execute_i32_and_eqz_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32AndImm16(instr) => self.execute_i32_and_imm16(
+                Instr::I32AndImm16 { result, lhs, rhs } => self.execute_i32_and_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Or(instr) => self.execute_i32_or(
+                Instr::I32Or { result, lhs, rhs } => self.execute_i32_or(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32OrEqz(instr) => self.execute_i32_or_eqz(
+                Instr::I32OrEqz { result, lhs, rhs } => self.execute_i32_or_eqz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32OrEqzImm16(instr) => self.execute_i32_or_eqz_imm16(
+                Instr::I32OrEqzImm16 { result, lhs, rhs } => self.execute_i32_or_eqz_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32OrImm16(instr) => self.execute_i32_or_imm16(
+                Instr::I32OrImm16 { result, lhs, rhs } => self.execute_i32_or_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Xor(instr) => self.execute_i32_xor(
+                Instr::I32Xor { result, lhs, rhs } => self.execute_i32_xor(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32XorEqz(instr) => self.execute_i32_xor_eqz(
+                Instr::I32XorEqz { result, lhs, rhs } => self.execute_i32_xor_eqz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32XorEqzImm16(instr) => self.execute_i32_xor_eqz_imm16(
+                Instr::I32XorEqzImm16 { result, lhs, rhs } => self.execute_i32_xor_eqz_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32XorImm16(instr) => self.execute_i32_xor_imm16(
+                Instr::I32XorImm16 { result, lhs, rhs } => self.execute_i32_xor_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Shl(instr) => self.execute_i32_shl(
+                Instr::I32Shl { result, lhs, rhs } => self.execute_i32_shl(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShlImm(instr) => self.execute_i32_shl_imm(
+                Instr::I32ShlBy { result, lhs, rhs } => self.execute_i32_shl_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShlImm16Rev(instr) => self.execute_i32_shl_imm16_rev(
+                Instr::I32ShlImm16 { result, lhs, rhs } => self.execute_i32_shl_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrU(instr) => self.execute_i32_shr_u(
+                Instr::I32ShrU { result, lhs, rhs } => self.execute_i32_shr_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrUImm(instr) => self.execute_i32_shr_u_imm(
+                Instr::I32ShrUBy { result, lhs, rhs } => self.execute_i32_shr_u_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrUImm16Rev(instr) => self.execute_i32_shr_u_imm16_rev(
+                Instr::I32ShrUImm16 { result, lhs, rhs } => self.execute_i32_shr_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrS(instr) => self.execute_i32_shr_s(
+                Instr::I32ShrS { result, lhs, rhs } => self.execute_i32_shr_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrSImm(instr) => self.execute_i32_shr_s_imm(
+                Instr::I32ShrSBy { result, lhs, rhs } => self.execute_i32_shr_s_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32ShrSImm16Rev(instr) => self.execute_i32_shr_s_imm16_rev(
+                Instr::I32ShrSImm16 { result, lhs, rhs } => self.execute_i32_shr_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Rotl(instr) => self.execute_i32_rotl(
+                Instr::I32Rotl { result, lhs, rhs } => self.execute_i32_rotl(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32RotlImm(instr) => self.execute_i32_rotl_imm(
+                Instr::I32RotlBy { result, lhs, rhs } => self.execute_i32_rotl_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32RotlImm16Rev(instr) => self.execute_i32_rotl_imm16_rev(
+                Instr::I32RotlImm16 { result, lhs, rhs } => self.execute_i32_rotl_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32Rotr(instr) => self.execute_i32_rotr(
+                Instr::I32Rotr { result, lhs, rhs } => self.execute_i32_rotr(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32RotrImm(instr) => self.execute_i32_rotr_imm(
+                Instr::I32RotrBy { result, lhs, rhs } => self.execute_i32_rotr_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32RotrImm16Rev(instr) => self.execute_i32_rotr_imm16_rev(
+                Instr::I32RotrImm16 { result, lhs, rhs } => self.execute_i32_rotr_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Clz(instr) => self.execute_i64_clz(
+                Instr::I64Clz { result, input } => self.execute_i64_clz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Ctz(instr) => self.execute_i64_ctz(
+                Instr::I64Ctz { result, input } => self.execute_i64_ctz(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Popcnt(instr) => self.execute_i64_popcnt(
+                Instr::I64Popcnt { result, input } => self.execute_i64_popcnt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Add(instr) => self.execute_i64_add(
+                Instr::I64Add { result, lhs, rhs } => self.execute_i64_add(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64AddImm16(instr) => self.execute_i64_add_imm16(
+                Instr::I64AddImm16 { result, lhs, rhs } => self.execute_i64_add_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Sub(instr) => self.execute_i64_sub(
+                Instr::I64Sub { result, lhs, rhs } => self.execute_i64_sub(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64SubImm16Rev(instr) => self.execute_i64_sub_imm16_rev(
+                Instr::I64SubImm16Lhs { result, lhs, rhs } => self.execute_i64_sub_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Mul(instr) => self.execute_i64_mul(
+                Instr::I64Mul { result, lhs, rhs } => self.execute_i64_mul(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64MulImm16(instr) => self.execute_i64_mul_imm16(
+                Instr::I64MulImm16 { result, lhs, rhs } => self.execute_i64_mul_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64DivS(instr) => self.execute_i64_div_s(
+                Instr::I64DivS { result, lhs, rhs } => self.execute_i64_div_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64DivSImm16(instr) => self.execute_i64_div_s_imm16(
+                Instr::I64DivSImm16Rhs { result, lhs, rhs } => self.execute_i64_div_s_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64DivSImm16Rev(instr) => self.execute_i64_div_s_imm16_rev(
+                Instr::I64DivSImm16Lhs { result, lhs, rhs } => self.execute_i64_div_s_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64DivU(instr) => self.execute_i64_div_u(
+                Instr::I64DivU { result, lhs, rhs } => self.execute_i64_div_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64DivUImm16(instr) => self.execute_i64_div_u_imm16(
+                Instr::I64DivUImm16Rhs { result, lhs, rhs } => self.execute_i64_div_u_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64DivUImm16Rev(instr) => self.execute_i64_div_u_imm16_rev(
+                Instr::I64DivUImm16Lhs { result, lhs, rhs } => self.execute_i64_div_u_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64RemS(instr) => self.execute_i64_rem_s(
+                Instr::I64RemS { result, lhs, rhs } => self.execute_i64_rem_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64RemSImm16(instr) => self.execute_i64_rem_s_imm16(
+                Instr::I64RemSImm16Rhs { result, lhs, rhs } => self.execute_i64_rem_s_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64RemSImm16Rev(instr) => self.execute_i64_rem_s_imm16_rev(
+                Instr::I64RemSImm16Lhs { result, lhs, rhs } => self.execute_i64_rem_s_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64RemU(instr) => self.execute_i64_rem_u(
+                Instr::I64RemU { result, lhs, rhs } => self.execute_i64_rem_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64RemUImm16(instr) => self.execute_i64_rem_u_imm16(
+                Instr::I64RemUImm16Rhs { result, lhs, rhs } => self.execute_i64_rem_u_imm16_rhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64RemUImm16Rev(instr) => self.execute_i64_rem_u_imm16_rev(
+                Instr::I64RemUImm16Lhs { result, lhs, rhs } => self.execute_i64_rem_u_imm16_lhs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 )?,
-                Instr::I64And(instr) => self.execute_i64_and(
+                Instr::I64And { result, lhs, rhs } => self.execute_i64_and(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64AndImm16(instr) => self.execute_i64_and_imm16(
+                Instr::I64AndImm16 { result, lhs, rhs } => self.execute_i64_and_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Or(instr) => self.execute_i64_or(
+                Instr::I64Or { result, lhs, rhs } => self.execute_i64_or(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64OrImm16(instr) => self.execute_i64_or_imm16(
+                Instr::I64OrImm16 { result, lhs, rhs } => self.execute_i64_or_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Xor(instr) => self.execute_i64_xor(
+                Instr::I64Xor { result, lhs, rhs } => self.execute_i64_xor(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64XorImm16(instr) => self.execute_i64_xor_imm16(
+                Instr::I64XorImm16 { result, lhs, rhs } => self.execute_i64_xor_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Shl(instr) => self.execute_i64_shl(
+                Instr::I64Shl { result, lhs, rhs } => self.execute_i64_shl(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShlImm(instr) => self.execute_i64_shl_imm(
+                Instr::I64ShlBy { result, lhs, rhs } => self.execute_i64_shl_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShlImm16Rev(instr) => self.execute_i64_shl_imm16_rev(
+                Instr::I64ShlImm16 { result, lhs, rhs } => self.execute_i64_shl_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrU(instr) => self.execute_i64_shr_u(
+                Instr::I64ShrU { result, lhs, rhs } => self.execute_i64_shr_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrUImm(instr) => self.execute_i64_shr_u_imm(
+                Instr::I64ShrUBy { result, lhs, rhs } => self.execute_i64_shr_u_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrUImm16Rev(instr) => self.execute_i64_shr_u_imm16_rev(
+                Instr::I64ShrUImm16 { result, lhs, rhs } => self.execute_i64_shr_u_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrS(instr) => self.execute_i64_shr_s(
+                Instr::I64ShrS { result, lhs, rhs } => self.execute_i64_shr_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrSImm(instr) => self.execute_i64_shr_s_imm(
+                Instr::I64ShrSBy { result, lhs, rhs } => self.execute_i64_shr_s_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64ShrSImm16Rev(instr) => self.execute_i64_shr_s_imm16_rev(
+                Instr::I64ShrSImm16 { result, lhs, rhs } => self.execute_i64_shr_s_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Rotl(instr) => self.execute_i64_rotl(
+                Instr::I64Rotl { result, lhs, rhs } => self.execute_i64_rotl(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64RotlImm(instr) => self.execute_i64_rotl_imm(
+                Instr::I64RotlBy { result, lhs, rhs } => self.execute_i64_rotl_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64RotlImm16Rev(instr) => self.execute_i64_rotl_imm16_rev(
+                Instr::I64RotlImm16 { result, lhs, rhs } => self.execute_i64_rotl_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64Rotr(instr) => self.execute_i64_rotr(
+                Instr::I64Rotr { result, lhs, rhs } => self.execute_i64_rotr(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64RotrImm(instr) => self.execute_i64_rotr_imm(
+                Instr::I64RotrBy { result, lhs, rhs } => self.execute_i64_rotr_by(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I64RotrImm16Rev(instr) => self.execute_i64_rotr_imm16_rev(
+                Instr::I64RotrImm16 { result, lhs, rhs } => self.execute_i64_rotr_imm16(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::I32WrapI64(instr) => self.execute_i32_wrap_i64(
+                Instr::I32WrapI64 { result, input } => self.execute_i32_wrap_i64(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64ExtendI32S(instr) => self.execute_i64_extend_i32_s(
+                Instr::I32Extend8S { result, input } => self.execute_i32_extend8_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64ExtendI32U(instr) => self.execute_i64_extend_i32_u(
+                Instr::I32Extend16S { result, input } => self.execute_i32_extend16_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32Extend8S(instr) => self.execute_i32_extend8_s(
+                Instr::I64Extend8S { result, input } => self.execute_i64_extend8_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32Extend16S(instr) => self.execute_i32_extend16_s(
+                Instr::I64Extend16S { result, input } => self.execute_i64_extend16_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Extend8S(instr) => self.execute_i64_extend8_s(
+                Instr::I64Extend32S { result, input } => self.execute_i64_extend32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Extend16S(instr) => self.execute_i64_extend16_s(
+                Instr::F32Abs { result, input } => self.execute_f32_abs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64Extend32S(instr) => self.execute_i64_extend32_s(
+                Instr::F32Neg { result, input } => self.execute_f32_neg(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Abs(instr) => self.execute_f32_abs(
+                Instr::F32Ceil { result, input } => self.execute_f32_ceil(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Neg(instr) => self.execute_f32_neg(
+                Instr::F32Floor { result, input } => self.execute_f32_floor(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Ceil(instr) => self.execute_f32_ceil(
+                Instr::F32Trunc { result, input } => self.execute_f32_trunc(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Floor(instr) => self.execute_f32_floor(
+                Instr::F32Nearest { result, input } => self.execute_f32_nearest(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Trunc(instr) => self.execute_f32_trunc(
+                Instr::F32Sqrt { result, input } => self.execute_f32_sqrt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32Nearest(instr) => self.execute_f32_nearest(
+                Instr::F32Add { result, lhs, rhs } => self.execute_f32_add(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Sqrt(instr) => self.execute_f32_sqrt(
+                Instr::F32Sub { result, lhs, rhs } => self.execute_f32_sub(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Add(instr) => self.execute_f32_add(
+                Instr::F32Mul { result, lhs, rhs } => self.execute_f32_mul(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Sub(instr) => self.execute_f32_sub(
+                Instr::F32Div { result, lhs, rhs } => self.execute_f32_div(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Mul(instr) => self.execute_f32_mul(
+                Instr::F32Min { result, lhs, rhs } => self.execute_f32_min(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Div(instr) => self.execute_f32_div(
+                Instr::F32Max { result, lhs, rhs } => self.execute_f32_max(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Min(instr) => self.execute_f32_min(
+                Instr::F32Copysign { result, lhs, rhs } => self.execute_f32_copysign(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Max(instr) => self.execute_f32_max(
+                Instr::F32CopysignImm { result, lhs, rhs } => self.execute_f32_copysign_imm(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F32Copysign(instr) => self.execute_f32_copysign(
+                Instr::F64Abs { result, input } => self.execute_f64_abs(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32CopysignImm(instr) => self.execute_f32_copysign_imm(instr),
-                Instr::F64Abs(instr) => self.execute_f64_abs(
+                Instr::F64Neg { result, input } => self.execute_f64_neg(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Neg(instr) => self.execute_f64_neg(
+                Instr::F64Ceil { result, input } => self.execute_f64_ceil(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Ceil(instr) => self.execute_f64_ceil(
+                Instr::F64Floor { result, input } => self.execute_f64_floor(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Floor(instr) => self.execute_f64_floor(
+                Instr::F64Trunc { result, input } => self.execute_f64_trunc(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Trunc(instr) => self.execute_f64_trunc(
+                Instr::F64Nearest { result, input } => self.execute_f64_nearest(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Nearest(instr) => self.execute_f64_nearest(
+                Instr::F64Sqrt { result, input } => self.execute_f64_sqrt(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64Sqrt(instr) => self.execute_f64_sqrt(
+                Instr::F64Add { result, lhs, rhs } => self.execute_f64_add(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Add(instr) => self.execute_f64_add(
+                Instr::F64Sub { result, lhs, rhs } => self.execute_f64_sub(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Sub(instr) => self.execute_f64_sub(
+                Instr::F64Mul { result, lhs, rhs } => self.execute_f64_mul(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Mul(instr) => self.execute_f64_mul(
+                Instr::F64Div { result, lhs, rhs } => self.execute_f64_div(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Div(instr) => self.execute_f64_div(
+                Instr::F64Min { result, lhs, rhs } => self.execute_f64_min(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Min(instr) => self.execute_f64_min(
+                Instr::F64Max { result, lhs, rhs } => self.execute_f64_max(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Max(instr) => self.execute_f64_max(
+                Instr::F64Copysign { result, lhs, rhs } => self.execute_f64_copysign(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64Copysign(instr) => self.execute_f64_copysign(
+                Instr::F64CopysignImm { result, lhs, rhs } => self.execute_f64_copysign_imm(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    lhs,
+                    rhs,
                 ),
-                Instr::F64CopysignImm(instr) => self.execute_f64_copysign_imm(instr),
-                Instr::I32TruncF32S(instr) => self.execute_i32_trunc_f32_s(
+                Instr::I32TruncF32S { result, input } => self.execute_i32_trunc_f32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I32TruncF32U(instr) => self.execute_i32_trunc_f32_u(
+                Instr::I32TruncF32U { result, input } => self.execute_i32_trunc_f32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I32TruncF64S(instr) => self.execute_i32_trunc_f64_s(
+                Instr::I32TruncF64S { result, input } => self.execute_i32_trunc_f64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I32TruncF64U(instr) => self.execute_i32_trunc_f64_u(
+                Instr::I32TruncF64U { result, input } => self.execute_i32_trunc_f64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I64TruncF32S(instr) => self.execute_i64_trunc_f32_s(
+                Instr::I64TruncF32S { result, input } => self.execute_i64_trunc_f32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I64TruncF32U(instr) => self.execute_i64_trunc_f32_u(
+                Instr::I64TruncF32U { result, input } => self.execute_i64_trunc_f32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I64TruncF64S(instr) => self.execute_i64_trunc_f64_s(
+                Instr::I64TruncF64S { result, input } => self.execute_i64_trunc_f64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I64TruncF64U(instr) => self.execute_i64_trunc_f64_u(
+                Instr::I64TruncF64U { result, input } => self.execute_i64_trunc_f64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 )?,
-                Instr::I32TruncSatF32S(instr) => self.execute_i32_trunc_sat_f32_s(
+                Instr::I32TruncSatF32S { result, input } => self.execute_i32_trunc_sat_f32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32TruncSatF32U(instr) => self.execute_i32_trunc_sat_f32_u(
+                Instr::I32TruncSatF32U { result, input } => self.execute_i32_trunc_sat_f32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32TruncSatF64S(instr) => self.execute_i32_trunc_sat_f64_s(
+                Instr::I32TruncSatF64S { result, input } => self.execute_i32_trunc_sat_f64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I32TruncSatF64U(instr) => self.execute_i32_trunc_sat_f64_u(
+                Instr::I32TruncSatF64U { result, input } => self.execute_i32_trunc_sat_f64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64TruncSatF32S(instr) => self.execute_i64_trunc_sat_f32_s(
+                Instr::I64TruncSatF32S { result, input } => self.execute_i64_trunc_sat_f32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64TruncSatF32U(instr) => self.execute_i64_trunc_sat_f32_u(
+                Instr::I64TruncSatF32U { result, input } => self.execute_i64_trunc_sat_f32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64TruncSatF64S(instr) => self.execute_i64_trunc_sat_f64_s(
+                Instr::I64TruncSatF64S { result, input } => self.execute_i64_trunc_sat_f64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::I64TruncSatF64U(instr) => self.execute_i64_trunc_sat_f64_u(
+                Instr::I64TruncSatF64U { result, input } => self.execute_i64_trunc_sat_f64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32DemoteF64(instr) => self.execute_f32_demote_f64(
+                Instr::F32DemoteF64 { result, input } => self.execute_f32_demote_f64(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64PromoteF32(instr) => self.execute_f64_promote_f32(
+                Instr::F64PromoteF32 { result, input } => self.execute_f64_promote_f32(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32ConvertI32S(instr) => self.execute_f32_convert_i32_s(
+                Instr::F32ConvertI32S { result, input } => self.execute_f32_convert_i32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32ConvertI32U(instr) => self.execute_f32_convert_i32_u(
+                Instr::F32ConvertI32U { result, input } => self.execute_f32_convert_i32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32ConvertI64S(instr) => self.execute_f32_convert_i64_s(
+                Instr::F32ConvertI64S { result, input } => self.execute_f32_convert_i64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F32ConvertI64U(instr) => self.execute_f32_convert_i64_u(
+                Instr::F32ConvertI64U { result, input } => self.execute_f32_convert_i64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64ConvertI32S(instr) => self.execute_f64_convert_i32_s(
+                Instr::F64ConvertI32S { result, input } => self.execute_f64_convert_i32_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64ConvertI32U(instr) => self.execute_f64_convert_i32_u(
+                Instr::F64ConvertI32U { result, input } => self.execute_f64_convert_i32_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64ConvertI64S(instr) => self.execute_f64_convert_i64_s(
+                Instr::F64ConvertI64S { result, input } => self.execute_f64_convert_i64_s(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
-                Instr::F64ConvertI64U(instr) => self.execute_f64_convert_i64_u(
+                Instr::F64ConvertI64U { result, input } => self.execute_f64_convert_i64_u(
                     do_update_runtime_signature.then_some(&mut store.inner),
-                    instr,
+                    result,
+                    input,
                 ),
                 Instr::TableGet { result, index } => {
                     self.execute_table_get(&store.inner, result, index)?
@@ -1851,11 +2493,11 @@ impl<'engine> Executor<'engine> {
                     delta,
                     value,
                 } => self.execute_table_grow_imm(store, result, delta, value)?,
-                Instr::ElemDrop(element_index) => {
-                    self.execute_element_drop(&mut store.inner, element_index)
+                Instr::ElemDrop { index } => self.execute_element_drop(&mut store.inner, index),
+                Instr::DataDrop { index } => self.execute_data_drop(&mut store.inner, index),
+                Instr::MemorySize { result, memory } => {
+                    self.execute_memory_size(&store.inner, result, memory)
                 }
-                Instr::DataDrop(data_index) => self.execute_data_drop(&mut store.inner, data_index),
-                Instr::MemorySize { result } => self.execute_memory_size(&store.inner, result),
                 Instr::MemoryGrow { result, delta } => {
                     self.execute_memory_grow(store, result, delta)?
                 }
@@ -1934,18 +2576,24 @@ impl<'engine> Executor<'engine> {
                 Instr::MemoryInitFromToExact { dst, src, len } => {
                     self.execute_memory_init_from_to_exact(&mut store.inner, dst, src, len)?
                 }
-                Instr::TableIdx(_)
-                | Instr::DataSegmentIdx(_)
-                | Instr::ElementSegmentIdx(_)
-                | Instr::Const32(_)
-                | Instr::I64Const32(_)
-                | Instr::F64Const32(_)
-                | Instr::Register(_)
-                | Instr::Register2(_)
-                | Instr::Register3(_)
-                | Instr::RegisterList(_)
-                | Instr::CallIndirectParams(_)
-                | Instr::CallIndirectParamsImm16(_) => self.invalid_instruction_word()?,
+                Instr::TableIndex { .. }
+                | Instr::MemoryIndex { .. }
+                | Instr::DataIndex { .. }
+                | Instr::ElemIndex { .. }
+                | Instr::Const32 { .. }
+                | Instr::I64Const32 { .. }
+                | Instr::F64Const32 { .. }
+                | Instr::BranchTableTarget { .. }
+                | Instr::BranchTableTargetNonOverlapping { .. }
+                | Instr::Register { .. }
+                | Instr::Register2 { .. }
+                | Instr::Register3 { .. }
+                | Instr::RegisterAndImm32 { .. }
+                | Instr::Imm16AndImm32 { .. }
+                | Instr::RegisterSpan { .. }
+                | Instr::RegisterList { .. }
+                | Instr::CallIndirectParams { .. }
+                | Instr::CallIndirectParamsImm16 { .. } => self.invalid_instruction_word()?,
             }
         }
     }
@@ -1954,7 +2602,7 @@ impl<'engine> Executor<'engine> {
 macro_rules! get_entity {
     (
         $(
-            fn $name:ident(&self, store: &StoreInner, index: $index_ty:ty) -> $id_ty:ty;
+            fn $name:ident(&self, index: $index_ty:ty) -> $id_ty:ty;
         )*
     ) => {
         $(
@@ -1972,39 +2620,33 @@ macro_rules! get_entity {
                 unsafe { self.cache.$name(index) }
                     .unwrap_or_else(|| {
                         const ENTITY_NAME: &'static str = ::core::stringify!($id_ty);
-                        ::core::unreachable!(
-                            "missing {ENTITY_NAME} at index {index:?} for the currently used instance",
-                        )
+                        // Safety: within the Wasmi executor it is assumed that store entity
+                        //         indices within the Wasmi bytecode are always valid for the
+                        //         store. This is an invariant of the Wasmi translation.
+                        unsafe {
+                            unreachable_unchecked!(
+                                "missing {ENTITY_NAME} at index {index:?} for the currently used instance",
+                            )
+                        }
                     })
             }
         )*
     }
 }
 
-impl<'engine> Executor<'engine> {
+impl Executor<'_> {
     get_entity! {
-        fn get_func(&self, store: &StoreInner, index: FuncIdx) -> Func;
-        fn get_func_type_dedup(&self, store: &StoreInner, index: SignatureIdx) -> DedupFuncType;
-        fn get_memory(&self, store: &StoreInner, index: u32) -> Memory;
-        fn get_table(&self, store: &StoreInner, index: TableIdx) -> Table;
-        fn get_global(&self, store: &StoreInner, index: GlobalIdx) -> Global;
-        fn get_data_segment(&self, store: &StoreInner, index: DataSegmentIdx) -> DataSegment;
-        fn get_element_segment(&self, store: &StoreInner, index: ElementSegmentIdx) -> ElementSegment;
+        fn get_func(&self, index: index::Func) -> Func;
+        fn get_func_type_dedup(&self, index: index::FuncType) -> DedupFuncType;
+        fn get_memory(&self, index: index::Memory) -> Memory;
+        fn get_table(&self, index: index::Table) -> Table;
+        fn get_global(&self, index: index::Global) -> Global;
+        fn get_data_segment(&self, index: index::Data) -> DataSegment;
+        fn get_element_segment(&self, index: index::Elem) -> ElementSegment;
     }
 
-    /// Returns the default memory of the current [`Instance`] for `ctx`.
-    ///
-    /// # Panics
-    ///
-    /// - If the current [`Instance`] does not belong to `ctx`.
-    /// - If the current [`Instance`] does not have a linear memory.
-    #[inline]
-    fn get_default_memory(&self) -> Memory {
-        self.get_memory(DEFAULT_MEMORY_INDEX)
-    }
-
-    /// Returns the [`Register`] value.
-    fn get_register(&self, register: Register) -> UntypedVal {
+    /// Returns the [`Reg`] value.
+    fn get_register(&self, register: Reg) -> UntypedVal {
         // Safety: - It is the responsibility of the `Executor`
         //           implementation to keep the `sp` pointer valid
         //           whenever this method is accessed.
@@ -2013,16 +2655,16 @@ impl<'engine> Executor<'engine> {
         unsafe { self.sp.get(register) }
     }
 
-    /// Returns the [`Register`] value.
-    fn get_register_as<T>(&self, register: Register) -> T
+    /// Returns the [`Reg`] value.
+    fn get_register_as<T>(&self, register: Reg) -> T
     where
         T: From<UntypedVal>,
     {
         T::from(self.get_register(register))
     }
 
-    /// Sets the [`Register`] value to `value`.
-    fn set_register(&mut self, register: Register, value: impl Into<UntypedVal>) {
+    /// Sets the [`Reg`] value to `value`.
+    fn set_register(&mut self, register: Reg, value: impl Into<UntypedVal>) {
         // Safety: - It is the responsibility of the `Executor`
         //           implementation to keep the `sp` pointer valid
         //           whenever this method is accessed.
@@ -2107,34 +2749,20 @@ impl<'engine> Executor<'engine> {
         *ip = frame.instr_ptr();
     }
 
-    /// Returns the [`Instruction::Const32`] parameter for an [`Instruction`].
-    fn fetch_const32(&self, offset: usize) -> AnyConst32 {
-        let mut addr: InstructionPtr = self.ip;
-        addr.add(offset);
-        match *addr.get() {
-            Instruction::Const32(value) => value,
-            _ => unreachable!("expected an Instruction::Const32 instruction word"),
-        }
-    }
-
-    /// Returns the [`Instruction::Const32`] parameter for an [`Instruction`].
-    fn fetch_address_offset(&self, offset: usize) -> u32 {
-        u32::from(self.fetch_const32(offset))
-    }
-
     /// Executes a generic unary [`Instruction`].
     #[inline(always)]
     fn execute_unary(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: UnaryInstr,
+        result: Reg,
+        input: Reg,
         op: fn(UntypedVal) -> UntypedVal,
     ) {
-        let value = self.get_register(instr.input);
+        let value = self.get_register(input);
         if let Some(store) = store {
             self.update_runtime_signature(store, value.to_bits());
         }
-        self.set_register(instr.result, op(value));
+        self.set_register(result, op(value));
         self.next_instr();
     }
 
@@ -2143,14 +2771,15 @@ impl<'engine> Executor<'engine> {
     fn try_execute_unary(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: UnaryInstr,
+        result: Reg,
+        input: Reg,
         op: fn(UntypedVal) -> Result<UntypedVal, TrapCode>,
     ) -> Result<(), Error> {
-        let value = self.get_register(instr.input);
+        let value = self.get_register(input);
         if let Some(store) = store {
             self.update_runtime_signature(store, value.to_bits());
         }
-        self.set_register(instr.result, op(value)?);
+        self.set_register(result, op(value)?);
         self.try_next_instr()
     }
 
@@ -2159,16 +2788,18 @@ impl<'engine> Executor<'engine> {
     fn execute_binary(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstr,
+        result: Reg,
+        lhs: Reg,
+        rhs: Reg,
         op: fn(UntypedVal, UntypedVal) -> UntypedVal,
     ) {
-        let lhs = self.get_register(instr.lhs);
-        let rhs = self.get_register(instr.rhs);
+        let lhs = self.get_register(lhs);
+        let rhs = self.get_register(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
             self.update_runtime_signature(store, rhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs));
+        self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
 
@@ -2177,40 +2808,67 @@ impl<'engine> Executor<'engine> {
     fn execute_binary_imm16<T>(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstrImm16<T>,
+        result: Reg,
+        lhs: Reg,
+        rhs: Const16<T>,
         op: fn(UntypedVal, UntypedVal) -> UntypedVal,
     ) where
         T: From<Const16<T>>,
         UntypedVal: From<T>,
     {
-        let lhs = self.get_register(instr.reg_in);
-        let rhs = UntypedVal::from(<T>::from(instr.imm_in));
+        let lhs = self.get_register(lhs);
+        let rhs = UntypedVal::from(<T>::from(rhs));
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
             self.update_runtime_signature(store, rhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs));
+        self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
 
     /// Executes a generic binary [`Instruction`] with reversed operands.
     #[inline(always)]
-    fn execute_binary_imm16_rev<T>(
+    fn execute_binary_imm16_lhs<T>(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstrImm16<T>,
+        result: Reg,
+        lhs: Const16<T>,
+        rhs: Reg,
         op: fn(UntypedVal, UntypedVal) -> UntypedVal,
     ) where
         T: From<Const16<T>>,
         UntypedVal: From<T>,
     {
-        let lhs = UntypedVal::from(<T>::from(instr.imm_in));
-        let rhs = self.get_register(instr.reg_in);
+        let lhs = UntypedVal::from(<T>::from(lhs));
+        let rhs = self.get_register(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
             self.update_runtime_signature(store, rhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs));
+        self.set_register(result, op(lhs, rhs));
+        self.next_instr();
+    }
+
+    /// Executes a generic shift or rotate [`Instruction`].
+    #[inline(always)]
+    fn execute_shift_by<T>(
+        &mut self,
+        store: Option<&mut StoreInner>,
+        result: Reg,
+        lhs: Reg,
+        rhs: ShiftAmount<T>,
+        op: fn(UntypedVal, UntypedVal) -> UntypedVal,
+    ) where
+        T: From<ShiftAmount<T>>,
+        UntypedVal: From<T>,
+    {
+        let lhs = self.get_register(lhs);
+        let rhs = UntypedVal::from(<T>::from(rhs));
+        if let Some(store) = store {
+            self.update_runtime_signature(store, lhs.to_bits());
+            self.update_runtime_signature(store, rhs.to_bits());
+        }
+        self.set_register(result, op(lhs, rhs));
         self.next_instr();
     }
 
@@ -2219,77 +2877,85 @@ impl<'engine> Executor<'engine> {
     fn try_execute_binary(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstr,
+        result: Reg,
+        lhs: Reg,
+        rhs: Reg,
         op: fn(UntypedVal, UntypedVal) -> Result<UntypedVal, TrapCode>,
     ) -> Result<(), Error> {
-        let lhs = self.get_register(instr.lhs);
-        let rhs = self.get_register(instr.rhs);
+        let lhs = self.get_register(lhs);
+        let rhs = self.get_register(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
             self.update_runtime_signature(store, rhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs)?);
+        self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }
 
     /// Executes a fallible generic binary [`Instruction`].
     #[inline(always)]
-    fn try_execute_divrem_imm16<NonZeroT>(
+    fn try_execute_divrem_imm16_rhs<NonZeroT>(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstrImm16<NonZeroT>,
+        result: Reg,
+        lhs: Reg,
+        rhs: Const16<NonZeroT>,
         op: fn(UntypedVal, NonZeroT) -> Result<UntypedVal, Error>,
     ) -> Result<(), Error>
     where
         NonZeroT: From<Const16<NonZeroT>>,
     {
-        let lhs = self.get_register(instr.reg_in);
-        let rhs = <NonZeroT>::from(instr.imm_in);
+        let lhs = self.get_register(lhs);
+        let rhs = <NonZeroT>::from(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs)?);
+        self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }
 
     /// Executes a fallible generic binary [`Instruction`].
     #[inline(always)]
-    fn execute_divrem_imm16<NonZeroT>(
+    fn execute_divrem_imm16_rhs<NonZeroT>(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstrImm16<NonZeroT>,
+        result: Reg,
+        lhs: Reg,
+        rhs: Const16<NonZeroT>,
         op: fn(UntypedVal, NonZeroT) -> UntypedVal,
     ) where
         NonZeroT: From<Const16<NonZeroT>>,
     {
-        let lhs = self.get_register(instr.reg_in);
-        let rhs = <NonZeroT>::from(instr.imm_in);
+        let lhs = self.get_register(lhs);
+        let rhs = <NonZeroT>::from(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs));
+        self.set_register(result, op(lhs, rhs));
         self.next_instr()
     }
 
     /// Executes a fallible generic binary [`Instruction`] with reversed operands.
     #[inline(always)]
-    fn try_execute_binary_imm16_rev<T>(
+    fn try_execute_binary_imm16_lhs<T>(
         &mut self,
         store: Option<&mut StoreInner>,
-        instr: BinInstrImm16<T>,
+        result: Reg,
+        lhs: Const16<T>,
+        rhs: Reg,
         op: fn(UntypedVal, UntypedVal) -> Result<UntypedVal, TrapCode>,
     ) -> Result<(), Error>
     where
         T: From<Const16<T>>,
         UntypedVal: From<T>,
     {
-        let lhs = UntypedVal::from(<T>::from(instr.imm_in));
-        let rhs = self.get_register(instr.reg_in);
+        let lhs = UntypedVal::from(<T>::from(lhs));
+        let rhs = self.get_register(rhs);
         if let Some(store) = store {
             self.update_runtime_signature(store, lhs.to_bits());
             self.update_runtime_signature(store, rhs.to_bits());
         }
-        self.set_register(instr.result, op(lhs, rhs)?);
+        self.set_register(result, op(lhs, rhs)?);
         self.try_next_instr()
     }
 
@@ -2302,28 +2968,66 @@ impl<'engine> Executor<'engine> {
         runtime_signature = runtime_signature.wrapping_mul(0xdfd951778ea84a0f);
         store.set_runtime_signature(runtime_signature);
     }
+
+    /// Skips all [`Instruction`]s belonging to an [`Instruction::RegisterList`] encoding.
+    #[inline(always)]
+    fn skip_register_list(ip: InstructionPtr) -> InstructionPtr {
+        let mut ip = ip;
+        while let Instruction::RegisterList { .. } = *ip.get() {
+            ip.add(1);
+        }
+        // We skip an additional `Instruction` because we know that `Instruction::RegisterList` is always followed by one of:
+        // - `Instruction::Register`
+        // - `Instruction::Register2`
+        // - `Instruction::Register3`.
+        ip.add(1);
+        ip
+    }
+
+    /// Returns the optional `memory` parameter for a `load_at` [`Instruction`].
+    ///
+    /// # Note
+    ///
+    /// - Returns the default [`index::Memory`] if the parameter is missing.
+    /// - Bumps `self.ip` if a [`Instruction::MemoryIndex`] parameter was found.
+    #[inline(always)]
+    fn fetch_optional_memory(&mut self) -> index::Memory {
+        let mut addr: InstructionPtr = self.ip;
+        addr.add(1);
+        match *addr.get() {
+            Instruction::MemoryIndex { index } => {
+                hint::cold();
+                self.ip = addr;
+                index
+            }
+            _ => index::Memory::from(0),
+        }
+    }
 }
 
-impl<'engine> Executor<'engine> {
+impl Executor<'_> {
     /// Used for all [`Instruction`] words that are not meant for execution.
     ///
     /// # Note
     ///
-    /// This includes [`Instruction`] variants such as [`Instruction::TableIdx`]
+    /// This includes [`Instruction`] variants such as [`Instruction::TableIndex`]
     /// that primarily carry parameters for actually executable [`Instruction`].
-    #[inline(always)]
     fn invalid_instruction_word(&mut self) -> Result<(), Error> {
-        self.execute_trap(TrapCode::UnreachableCodeReached)
+        // Safety: Wasmi translation guarantees that branches are never taken to instruction parameters directly.
+        unsafe {
+            unreachable_unchecked!(
+                "expected instruction but found instruction parameter: {:?}",
+                *self.ip.get()
+            )
+        }
     }
 
     /// Executes a Wasm `unreachable` instruction.
-    #[inline(always)]
     fn execute_trap(&mut self, trap_code: TrapCode) -> Result<(), Error> {
         Err(Error::from(trap_code))
     }
 
     /// Executes an [`Instruction::ConsumeFuel`].
-    #[inline(always)]
     fn execute_consume_fuel(
         &mut self,
         store: &mut StoreInner,
@@ -2339,8 +3043,7 @@ impl<'engine> Executor<'engine> {
     }
 
     /// Executes an [`Instruction::RefFunc`].
-    #[inline(always)]
-    fn execute_ref_func(&mut self, result: Register, func_index: FuncIdx) {
+    fn execute_ref_func(&mut self, result: Reg, func_index: index::Func) {
         let func = self.get_func(func_index);
         let funcref = FuncRef::new(func);
         self.set_register(result, funcref);

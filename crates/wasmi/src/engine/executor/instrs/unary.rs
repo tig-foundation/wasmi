@@ -1,5 +1,5 @@
 use super::Executor;
-use crate::{core::UntypedVal, engine::bytecode::UnaryInstr, store::StoreInner};
+use crate::{core::UntypedVal, engine::bytecode::Reg, store::StoreInner};
 
 #[cfg(doc)]
 use crate::engine::bytecode::Instruction;
@@ -8,15 +8,14 @@ macro_rules! impl_unary_impls {
     ( $( (Instruction::$var_name:ident, $fn_name:ident, $op:expr) ),* $(,)? ) => {
         $(
             #[doc = concat!("Executes an [`Instruction::", stringify!($var_name), "`].")]
-            #[inline(always)]
-            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, instr: UnaryInstr) {
-                self.execute_unary(store, instr, $op)
+            pub fn $fn_name(&mut self, store: Option<&mut StoreInner>, result: Reg, input: Reg) {
+                self.execute_unary(store, result, input, $op)
             }
         )*
     };
 }
 
-impl<'engine> Executor<'engine> {
+impl Executor<'_> {
     impl_unary_impls! {
         (Instruction::I32Clz, execute_i32_clz, UntypedVal::i32_clz),
         (Instruction::I32Ctz, execute_i32_ctz, UntypedVal::i32_ctz),

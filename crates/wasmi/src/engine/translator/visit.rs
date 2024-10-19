@@ -11,19 +11,18 @@ use super::{
     },
     stack::TypedProvider,
     ControlFrameKind,
-    FuelInfo,
     FuncTranslator,
-    LabelRef,
     TypedVal,
 };
 use crate::{
     core::{TrapCode, ValType, F32, F64},
     engine::{
-        bytecode::{self, Const16, Instruction, Provider, Register, SignatureIdx},
-        translator::AcquiredTarget,
+        bytecode::{self, index::FuncType, BoundedRegSpan, Const16, Instruction, Reg},
+        translator::{AcquiredTarget, Provider},
         BlockType,
         FuelCosts,
     },
+    ir::index,
     module::{self, FuncIdx, WasmiValueType},
     Error,
     ExternRef,
@@ -31,15 +30,12 @@ use crate::{
     Mutability,
 };
 use core::num::{NonZeroU32, NonZeroU64};
-use std::collections::BTreeMap;
 use wasmparser::VisitOperator;
 
 /// Used to swap operands of a `rev` variant [`Instruction`] constructor.
 macro_rules! swap_ops {
     ($fn_name:path) => {
-        |result: Register, lhs: Const16<_>, rhs: Register| -> Instruction {
-            $fn_name(result, rhs, lhs)
-        }
+        |result: Reg, lhs: Const16<_>, rhs: Reg| -> Instruction { $fn_name(result, rhs, lhs) }
     };
 }
 
@@ -97,7 +93,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
 
     fn visit_unreachable(&mut self) -> Self::Output {
         bail_unreachable!(self);
-        self.push_base_instr(Instruction::Trap(TrapCode::UnreachableCodeReached))?;
+        self.push_base_instr(Instruction::trap(TrapCode::UnreachableCodeReached))?;
         self.reachable = false;
         Ok(())
     }
@@ -156,17 +152,21 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 ));
             return Ok(());
         }
+        self.preserve_locals()?;
         // Copy `loop` parameters over to where it expects its branch parameters.
         let len_block_params = block_type.len_params(self.engine());
-        self.alloc
+        self.alloc.stack.pop_n(
+            usize::from(len_block_params),
+            &mut self.alloc.buffer.providers,
+        );
+        let branch_params = self
+            .alloc
             .stack
-            .pop_n(len_block_params, &mut self.alloc.buffer.providers);
-        let branch_params = self.alloc.stack.push_dynamic_n(len_block_params)?;
-        // self.preserve_locals()?; // TODO: find a case where local preservation before loops is necessary
+            .push_dynamic_n(usize::from(len_block_params))?;
         let fuel_info = self.fuel_info();
         self.alloc.instr_encoder.encode_copies(
             &mut self.alloc.stack,
-            branch_params.iter(len_block_params),
+            BoundedRegSpan::new(branch_params, len_block_params),
             &self.alloc.buffer.providers[..],
             fuel_info,
         )?;
@@ -240,9 +240,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             TypedProvider::Register(condition) => {
                 // Push the `if` parameters on the `else` provider stack for
                 // later use in case we eventually visit the `else` branch.
-                self.alloc
-                    .stack
-                    .peek_n(len_block_params, &mut self.alloc.buffer.providers);
+                self.alloc.stack.peek_n(
+                    usize::from(len_block_params),
+                    &mut self.alloc.buffer.providers,
+                );
                 self.alloc
                     .control_stack
                     .push_else_providers(self.alloc.buffer.providers.iter().copied())?;
@@ -383,20 +384,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
 
     fn visit_br(&mut self, relative_depth: u32) -> Self::Output {
         bail_unreachable!(self);
-        let engine = self.engine().clone();
-        match self.alloc.control_stack.acquire_target(relative_depth) {
-            AcquiredTarget::Return(_frame) => self.translate_return(),
-            AcquiredTarget::Branch(frame) => {
-                frame.bump_branches();
-                let branch_dst = frame.branch_destination();
-                let branch_params = frame.branch_params(&engine);
-                self.translate_copy_branch_params(branch_params)?;
-                let branch_offset = self.alloc.instr_encoder.try_resolve_label(branch_dst)?;
-                self.push_base_instr(Instruction::branch(branch_offset))?;
-                self.reachable = false;
-                Ok(())
-            }
-        }
+        self.translate_br(relative_depth)
     }
 
     fn visit_br_if(&mut self, relative_depth: u32) -> Self::Output {
@@ -405,11 +393,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         match self.alloc.stack.pop() {
             TypedProvider::Const(condition) => {
                 if i32::from(condition) != 0 {
-                    // Case: `condition == 1` so the branch is always taken.
+                    // Case: `condition != 0` so the branch is always taken.
                     // Therefore we can simplify the `br_if` to a `br` instruction.
-                    self.visit_br(relative_depth)
+                    self.translate_br(relative_depth)
                 } else {
-                    // Case: `condition != 1` so the branch is never taken.
+                    // Case: `condition == 0` so the branch is never taken.
                     // Therefore the `br_if` is a `nop` and can be ignored.
                     Ok(())
                 }
@@ -432,16 +420,17 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                             )?;
                             return Ok(());
                         }
-                        self.alloc
-                            .stack
-                            .peek_n(branch_params.len(), &mut self.alloc.buffer.providers);
+                        self.alloc.stack.peek_n(
+                            usize::from(branch_params.len()),
+                            &mut self.alloc.buffer.providers,
+                        );
                         if self
                             .alloc
                             .buffer
                             .providers
                             .iter()
                             .copied()
-                            .eq(branch_params.map(TypedProvider::Register))
+                            .eq(branch_params.iter().map(TypedProvider::Register))
                         {
                             // Case: the providers on the stack are already as
                             //       expected by the branch params and therefore
@@ -489,155 +478,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
 
     fn visit_br_table(&mut self, targets: wasmparser::BrTable<'a>) -> Self::Output {
         bail_unreachable!(self);
-        let engine = self.engine().clone();
-        let fuel_info = self.fuel_info();
-        let index = self.alloc.stack.pop();
-        if targets.is_empty() {
-            // Case: the `br_table` only has a default target.
-            //
-            // This means the `br_table` always branches to the default target
-            // independent of the `index` value. Therefore we can encode it as
-            // a simpler `br` instruction instead.
-            return self.visit_br(targets.default());
-        }
-        let default_target = targets.default();
-        let index: Register = match index {
-            TypedProvider::Register(index) => index,
-            TypedProvider::Const(index) => {
-                // Case: the index is a constant value.
-                //
-                // This means the `br_table` always branches to the same target
-                // and therefore acts exactly the same as a normal `br` instruction.
-                let chosen_index = u32::from(index) as usize;
-                let chosen_target = targets
-                    .targets()
-                    .nth(chosen_index)
-                    .transpose()?
-                    .unwrap_or(default_target);
-                return self.visit_br(chosen_target);
-            }
-        };
-        // Add `br_table` targets to `br_table_targets` buffer including default target.
-        // This allows us to uniformely treat all `br_table` targets the same and only parse once.
-        self.alloc.buffer.br_table_targets.clear();
-        for target in targets.targets() {
-            self.alloc.buffer.br_table_targets.push(target?);
-        }
-        self.alloc.buffer.br_table_targets.push(default_target);
-        // We check if all `br_table` targets expect their results at the same
-        // registers which allows us to encode the `br_table` more efficiently
-        // by using a single copy instruction before branching instead of having
-        // to copy in each branch.
-        let default_branch_params = self
-            .alloc
-            .control_stack
-            .acquire_target(default_target)
-            .control_frame()
-            .branch_params(&engine);
-        let same_branch_params = self
-            .alloc
-            .buffer
-            .br_table_targets
-            .iter()
-            .copied()
-            .all(|target| {
-                match self.alloc.control_stack.acquire_target(target) {
-                    AcquiredTarget::Return(_) => {
-                        // Return instructions never need to copy anything and
-                        // thus we can simply ignore them for this conditional.
-                        true
-                    }
-                    AcquiredTarget::Branch(frame) => {
-                        default_branch_params == frame.branch_params(&engine)
-                    }
-                }
-            });
-        if default_branch_params.is_empty() || same_branch_params {
-            // Case 1: No `br_target` target requires values to be copied around.
-            // Case 2: All `br_target` targets use the same branch parameter registers.
-            //
-            // In both cases it is sufficient to copy values to the destination of
-            // the default branch target and encode the `br_table` with a series of
-            // simple direct branches without any further copy instructions.
-            self.push_base_instr(Instruction::branch_table(index, targets.len() + 1))?;
-            self.translate_copy_branch_params(default_branch_params)?;
-            let return_instr = match default_branch_params.len() {
-                0 => Instruction::Return,
-                1 => Instruction::return_reg(default_branch_params.span().head()),
-                _ => Instruction::return_span(default_branch_params),
-            };
-            for target in self.alloc.buffer.br_table_targets.iter().copied() {
-                match self.alloc.control_stack.acquire_target(target) {
-                    AcquiredTarget::Return(_) => {
-                        self.alloc.instr_encoder.append_instr(return_instr)?;
-                    }
-                    AcquiredTarget::Branch(frame) => {
-                        frame.bump_branches();
-                        let branch_dst = frame.branch_destination();
-                        let branch_offset =
-                            self.alloc.instr_encoder.try_resolve_label(branch_dst)?;
-                        self.alloc
-                            .instr_encoder
-                            .append_instr(Instruction::branch(branch_offset))?;
-                    }
-                }
-            }
-            self.reachable = false;
-            return Ok(());
-        }
-        // Case: Some branch targets differ in their branch parameter registers.
-        //
-        // Therefore we cannot copy registers before the `br_table` instruction and
-        // instead need to perform the copy instructions in the `br_table` branch arms.
-        //
-        // Since `br_table` target depths are often shared we use a btree-set to
-        // share codegen for `br_table` arms that have the same branch target.
-        self.push_base_instr(Instruction::branch_table(index, targets.len() + 1))?;
-        let mut shared_targets = <BTreeMap<u32, LabelRef>>::new();
-        for target in self.alloc.buffer.br_table_targets.iter().copied() {
-            let shared_label = *shared_targets
-                .entry(target)
-                .or_insert_with(|| self.alloc.instr_encoder.new_label());
-            let branch_offset = self.alloc.instr_encoder.try_resolve_label(shared_label)?;
-            self.alloc
-                .instr_encoder
-                .append_instr(Instruction::branch(branch_offset))?;
-        }
-        let values = &mut self.alloc.buffer.providers;
-        self.alloc.stack.pop_n(default_branch_params.len(), values);
-        for (depth, label) in shared_targets {
-            self.alloc.instr_encoder.pin_label(label);
-            match self.alloc.control_stack.acquire_target(depth) {
-                AcquiredTarget::Return(_frame) => {
-                    // Note: We do not use fuel metering for the below
-                    //       `encode_return` instruction since it is part
-                    //       of the `br_table` instruction above.
-                    self.alloc.instr_encoder.encode_return(
-                        &mut self.alloc.stack,
-                        values,
-                        FuelInfo::None,
-                    )?;
-                }
-                AcquiredTarget::Branch(frame) => {
-                    frame.bump_branches();
-                    self.alloc.instr_encoder.encode_copies(
-                        &mut self.alloc.stack,
-                        frame.branch_params(&engine),
-                        values,
-                        fuel_info,
-                    )?;
-                    let branch_dst = frame.branch_destination();
-                    let branch_offset = self.alloc.instr_encoder.try_resolve_label(branch_dst)?;
-                    // Note: No need to bump fuel consumption for each branch table target
-                    //       since only one of the branch targets is going to be executed.
-                    self.alloc
-                        .instr_encoder
-                        .push_instr(Instruction::branch(branch_offset))?;
-                }
-            }
-        }
-        self.reachable = false;
-        Ok(())
+        self.translate_br_table(targets)
     }
 
     fn visit_return(&mut self) -> Self::Output {
@@ -687,35 +528,31 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     ) -> Self::Output {
         bail_unreachable!(self);
         self.bump_fuel_consumption(FuelCosts::call)?;
-        let type_index = SignatureIdx::from(type_index);
+        let type_index = FuncType::from(type_index);
         let func_type = self.func_type_at(type_index);
-        let (params, results) = func_type.params_results();
         let index = self.alloc.stack.pop();
+        let indirect_params = self.call_indirect_params(index, table_index)?;
+        let (params, results) = func_type.params_results();
         let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
-        let table_params = match index {
-            TypedProvider::Const(index) => match <Const16<u32>>::try_from(u32::from(index)).ok() {
-                Some(index) => {
-                    // Case: the index is encodable as 16-bit constant value
-                    //       which allows us to use an optimized instruction.
-                    Instruction::call_indirect_params_imm16(index, table_index)
-                }
-                None => {
-                    // Case: the index is not encodable as 16-bit constant value
-                    //       and we need to allocate it as function local constant.
-                    let index = self.alloc.stack.alloc_const(index)?;
-                    Instruction::call_indirect_params(index, table_index)
-                }
-            },
-            TypedProvider::Register(index) => Instruction::call_indirect_params(index, table_index),
-        };
         let results = self.alloc.stack.push_dynamic_n(results.len())?;
-        let instr = match params.len() {
-            0 => Instruction::call_indirect_0(results, type_index),
-            _ => Instruction::call_indirect(results, type_index),
+        let instr = match (params.len(), indirect_params) {
+            (0, Instruction::CallIndirectParams { .. }) => {
+                Instruction::call_indirect_0(results, type_index)
+            }
+            (0, Instruction::CallIndirectParamsImm16 { .. }) => {
+                Instruction::call_indirect_0_imm16(results, type_index)
+            }
+            (_, Instruction::CallIndirectParams { .. }) => {
+                Instruction::call_indirect(results, type_index)
+            }
+            (_, Instruction::CallIndirectParamsImm16 { .. }) => {
+                Instruction::call_indirect_imm16(results, type_index)
+            }
+            _ => unreachable!(),
         };
         self.alloc.instr_encoder.push_instr(instr)?;
-        self.alloc.instr_encoder.append_instr(table_params)?;
+        self.alloc.instr_encoder.append_instr(indirect_params)?;
         self.alloc
             .instr_encoder
             .encode_register_list(&mut self.alloc.stack, provider_params)?;
@@ -759,34 +596,30 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_return_call_indirect(&mut self, type_index: u32, table_index: u32) -> Self::Output {
         bail_unreachable!(self);
         self.bump_fuel_consumption(FuelCosts::call)?;
-        let type_index = SignatureIdx::from(type_index);
+        let type_index = FuncType::from(type_index);
         let func_type = self.func_type_at(type_index);
         let params = func_type.params();
         let index = self.alloc.stack.pop();
+        let indirect_params = self.call_indirect_params(index, table_index)?;
         let provider_params = &mut self.alloc.buffer.providers;
         self.alloc.stack.pop_n(params.len(), provider_params);
-        let table_params = match index {
-            TypedProvider::Const(index) => match <Const16<u32>>::try_from(u32::from(index)).ok() {
-                Some(index) => {
-                    // Case: the index is encodable as 16-bit constant value
-                    //       which allows us to use an optimized instruction.
-                    Instruction::call_indirect_params_imm16(index, table_index)
-                }
-                None => {
-                    // Case: the index is not encodable as 16-bit constant value
-                    //       and we need to allocate it as function local constant.
-                    let index = self.alloc.stack.alloc_const(index)?;
-                    Instruction::call_indirect_params(index, table_index)
-                }
-            },
-            TypedProvider::Register(index) => Instruction::call_indirect_params(index, table_index),
-        };
-        let instr = match params.len() {
-            0 => Instruction::return_call_indirect_0(type_index),
-            _ => Instruction::return_call_indirect(type_index),
+        let instr = match (params.len(), indirect_params) {
+            (0, Instruction::CallIndirectParams { .. }) => {
+                Instruction::return_call_indirect_0(type_index)
+            }
+            (0, Instruction::CallIndirectParamsImm16 { .. }) => {
+                Instruction::return_call_indirect_0_imm16(type_index)
+            }
+            (_, Instruction::CallIndirectParams { .. }) => {
+                Instruction::return_call_indirect(type_index)
+            }
+            (_, Instruction::CallIndirectParamsImm16 { .. }) => {
+                Instruction::return_call_indirect_imm16(type_index)
+            }
+            _ => unreachable!(),
         };
         self.alloc.instr_encoder.push_instr(instr)?;
-        self.alloc.instr_encoder.append_instr(table_params)?;
+        self.alloc.instr_encoder.append_instr(indirect_params)?;
         self.alloc
             .instr_encoder
             .encode_register_list(&mut self.alloc.stack, provider_params)?;
@@ -796,7 +629,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
 
     fn visit_drop(&mut self) -> Self::Output {
         bail_unreachable!(self);
-        self.alloc.stack.pop();
+        self.alloc.stack.drop();
         Ok(())
     }
 
@@ -819,7 +652,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         bail_unreachable!(self);
         self.alloc.stack.gc_preservations();
         let value = self.alloc.stack.pop();
-        let local = Register::try_from(local_index)?;
+        let local = Reg::try_from(local_index)?;
         if let TypedProvider::Register(value) = value {
             if value == local {
                 // Case: `(local.set $n (local.get $n))` is a no-op so we can ignore it.
@@ -877,7 +710,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         }
         // Case: The `global.get` instruction accesses a mutable or imported
         //       global variable and thus cannot be optimized away.
-        let global_idx = bytecode::GlobalIdx::from(global_index);
+        let global_idx = bytecode::index::Global::from(global_index);
         let result = self.alloc.stack.push_dynamic()?;
         self.push_fueled_instr(
             Instruction::global_get(result, global_idx),
@@ -888,10 +721,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
 
     fn visit_global_set(&mut self, global_index: u32) -> Self::Output {
         bail_unreachable!(self);
-        let global = bytecode::GlobalIdx::from(global_index);
+        let global = bytecode::index::Global::from(global_index);
         match self.alloc.stack.pop() {
             TypedProvider::Register(input) => {
-                self.push_fueled_instr(Instruction::global_set(global, input), FuelCosts::entity)?;
+                self.push_fueled_instr(Instruction::global_set(input, global), FuelCosts::entity)?;
                 Ok(())
             }
             TypedProvider::Const(input) => {
@@ -903,7 +736,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     ValType::I32 => {
                         if let Ok(value) = Const16::try_from(i32::from(input)) {
                             self.push_fueled_instr(
-                                Instruction::global_set_i32imm16(global, value),
+                                Instruction::global_set_i32imm16(value, global),
                                 FuelCosts::entity,
                             )?;
                             return Ok(());
@@ -912,7 +745,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     ValType::I64 => {
                         if let Ok(value) = Const16::try_from(i64::from(input)) {
                             self.push_fueled_instr(
-                                Instruction::global_set_i64imm16(global, value),
+                                Instruction::global_set_i64imm16(value, global),
                                 FuelCosts::entity,
                             )?;
                             return Ok(());
@@ -921,7 +754,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                     _ => {}
                 };
                 let cref = self.alloc.stack.alloc_const(input)?;
-                self.push_fueled_instr(Instruction::global_set(global, cref), FuelCosts::entity)?;
+                self.push_fueled_instr(Instruction::global_set(cref, global), FuelCosts::entity)?;
                 Ok(())
             }
         }
@@ -1057,6 +890,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_istore::<i32, i16>(
             memarg,
             Instruction::i32_store,
+            Instruction::i32_store_imm16,
             Instruction::i32_store_offset16,
             Instruction::i32_store_offset16_imm16,
             Instruction::i32_store_at,
@@ -1068,6 +902,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_istore::<i64, i16>(
             memarg,
             Instruction::i64_store,
+            Instruction::i64_store_imm16,
             Instruction::i64_store_offset16,
             Instruction::i64_store_offset16_imm16,
             Instruction::i64_store_at,
@@ -1094,9 +929,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i32_store8(&mut self, memarg: wasmparser::MemArg) -> Self::Output {
-        self.translate_istore::<i32, i8>(
+        self.translate_istore_wrap::<i32, i8, i8>(
             memarg,
             Instruction::i32_store8,
+            Instruction::i32_store8_imm,
             Instruction::i32_store8_offset16,
             Instruction::i32_store8_offset16_imm,
             Instruction::i32_store8_at,
@@ -1105,9 +941,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i32_store16(&mut self, memarg: wasmparser::MemArg) -> Self::Output {
-        self.translate_istore::<i32, i16>(
+        self.translate_istore_wrap::<i32, i16, i16>(
             memarg,
             Instruction::i32_store16,
+            Instruction::i32_store16_imm,
             Instruction::i32_store16_offset16,
             Instruction::i32_store16_offset16_imm,
             Instruction::i32_store16_at,
@@ -1116,9 +953,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i64_store8(&mut self, memarg: wasmparser::MemArg) -> Self::Output {
-        self.translate_istore::<i64, i8>(
+        self.translate_istore_wrap::<i64, i8, i8>(
             memarg,
             Instruction::i64_store8,
+            Instruction::i64_store8_imm,
             Instruction::i64_store8_offset16,
             Instruction::i64_store8_offset16_imm,
             Instruction::i64_store8_at,
@@ -1127,9 +965,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i64_store16(&mut self, memarg: wasmparser::MemArg) -> Self::Output {
-        self.translate_istore::<i64, i16>(
+        self.translate_istore_wrap::<i64, i16, i16>(
             memarg,
             Instruction::i64_store16,
+            Instruction::i64_store16_imm,
             Instruction::i64_store16_offset16,
             Instruction::i64_store16_offset16_imm,
             Instruction::i64_store16_at,
@@ -1138,9 +977,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i64_store32(&mut self, memarg: wasmparser::MemArg) -> Self::Output {
-        self.translate_istore::<i64, i16>(
+        self.translate_istore_wrap::<i64, i32, i16>(
             memarg,
             Instruction::i64_store32,
+            Instruction::i64_store32_imm16,
             Instruction::i64_store32_offset16,
             Instruction::i64_store32_offset16_imm16,
             Instruction::i64_store32_at,
@@ -1149,34 +989,35 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_memory_size(&mut self, mem: u32, _mem_byte: u8) -> Self::Output {
-        debug_assert_eq!(
-            mem, 0,
-            "wasmi does not yet support the multi-memory Wasm proposal"
-        );
         bail_unreachable!(self);
+        let memory = index::Memory::from(mem);
         let result = self.alloc.stack.push_dynamic()?;
-        self.push_fueled_instr(Instruction::memory_size(result), FuelCosts::entity)?;
+        self.push_fueled_instr(Instruction::memory_size(result, memory), FuelCosts::entity)?;
         Ok(())
     }
 
-    fn visit_memory_grow(&mut self, _mem: u32, _mem_byte: u8) -> Self::Output {
+    fn visit_memory_grow(&mut self, mem: u32, _mem_byte: u8) -> Self::Output {
         bail_unreachable!(self);
-        let delta = self.alloc.stack.pop();
-        let delta = <Provider<Const16<u32>>>::new(delta, &mut self.alloc.stack)?;
+        let delta = self.alloc.stack.pop().map_const(u32::from);
+        let memory = index::Memory::from(mem);
         let result = self.alloc.stack.push_dynamic()?;
+        if let Provider::Const(0) = delta {
+            // Case: growing by 0 pages.
+            //
+            // Since `memory.grow` returns the `memory.size` before the
+            // operation a `memory.grow` with `delta` of 0 can be translated
+            // as `memory.size` instruction instead.
+            self.push_fueled_instr(Instruction::memory_size(result, memory), FuelCosts::entity)?;
+            return Ok(());
+        }
         let instr = match delta {
-            Provider::Register(delta) => Instruction::memory_grow(result, delta),
-            Provider::Const(delta) if u32::from(delta) == 0 => {
-                // Case: growing by 0 pages.
-                //
-                // Since `memory.grow` returns the `memory.size` before the
-                // operation a `memory.grow` with `delta` of 0 can be translated
-                // as `memory.size` instruction instead.
-                Instruction::memory_size(result)
-            }
             Provider::Const(delta) => Instruction::memory_grow_by(result, delta),
+            Provider::Register(delta) => Instruction::memory_grow(result, delta),
         };
         self.push_fueled_instr(instr, FuelCosts::entity)?;
+        self.alloc
+            .instr_encoder
+            .append_instr(Instruction::memory_index(memory))?;
         Ok(())
     }
 
@@ -1217,6 +1058,19 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_ref_is_null(&mut self) -> Self::Output {
+        bail_unreachable!(self);
+        let input = self.alloc.stack.peek();
+        if let Provider::Const(input) = input {
+            self.alloc.stack.drop();
+            let untyped = input.untyped();
+            let is_null = match input.ty() {
+                ValType::FuncRef => FuncRef::from(untyped).is_null(),
+                ValType::ExternRef => ExternRef::from(untyped).is_null(),
+                invalid => panic!("ref.is_null: encountered invalid input type: {invalid:?}"),
+            };
+            self.alloc.stack.push_const(i32::from(is_null));
+            return Ok(());
+        }
         // Note: Since `funcref` and `externref` both serialize to `UntypedValue`
         //       as raw `u64` values we can use `i64.eqz` translation for `ref.is_null`.
         self.visit_i64_eqz()
@@ -1248,7 +1102,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_eq,
             Instruction::i32_eq_imm16,
             TypedVal::i32_eq,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x == x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1265,7 +1119,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_ne,
             Instruction::i32_ne_imm16,
             TypedVal::i32_ne,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x != x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1283,7 +1137,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_lt_s_imm16,
             swap_ops!(Instruction::i32_gt_s_imm16),
             TypedVal::i32_lt_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1291,7 +1145,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i32| {
+            |this, _lhs: Reg, rhs: i32| {
                 if rhs == i32::MIN {
                     // Optimization: `x < MIN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1299,7 +1153,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == i32::MAX {
                     // Optimization: `MAX < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1316,7 +1170,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_lt_u_imm16,
             swap_ops!(Instruction::i32_gt_u_imm16),
             TypedVal::i32_lt_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1324,7 +1178,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u32| {
+            |this, _lhs: Reg, rhs: u32| {
                 if rhs == u32::MIN {
                     // Optimization: `x < MIN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1332,7 +1186,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u32, _rhs: Register| {
+            |this, lhs: u32, _rhs: Reg| {
                 if lhs == u32::MAX {
                     // Optimization: `MAX < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1349,7 +1203,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_gt_s_imm16,
             swap_ops!(Instruction::i32_lt_s_imm16),
             TypedVal::i32_gt_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1357,7 +1211,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i32| {
+            |this, _lhs: Reg, rhs: i32| {
                 if rhs == i32::MAX {
                     // Optimization: `x > MAX` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1365,7 +1219,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == i32::MIN {
                     // Optimization: `MIN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1382,7 +1236,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_gt_u_imm16,
             swap_ops!(Instruction::i32_lt_u_imm16),
             TypedVal::i32_gt_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1390,7 +1244,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u32| {
+            |this, _lhs: Reg, rhs: u32| {
                 if rhs == u32::MAX {
                     // Optimization: `x > MAX` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1398,7 +1252,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u32, _rhs: Register| {
+            |this, lhs: u32, _rhs: Reg| {
                 if lhs == u32::MIN {
                     // Optimization: `MIN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1415,7 +1269,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_le_s_imm16,
             swap_ops!(Instruction::i32_ge_s_imm16),
             TypedVal::i32_le_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1423,7 +1277,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i32| {
+            |this, _lhs: Reg, rhs: i32| {
                 if rhs == i32::MAX {
                     // Optimization: `x <= MAX` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1431,7 +1285,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == i32::MIN {
                     // Optimization: `MIN <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1448,7 +1302,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_le_u_imm16,
             swap_ops!(Instruction::i32_ge_u_imm16),
             TypedVal::i32_le_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1456,7 +1310,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u32| {
+            |this, _lhs: Reg, rhs: u32| {
                 if rhs == u32::MAX {
                     // Optimization: `x <= MAX` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1464,7 +1318,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u32, _rhs: Register| {
+            |this, lhs: u32, _rhs: Reg| {
                 if lhs == u32::MIN {
                     // Optimization: `MIN <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1481,7 +1335,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_ge_s_imm16,
             swap_ops!(Instruction::i32_le_s_imm16),
             TypedVal::i32_ge_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1489,7 +1343,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i32| {
+            |this, _lhs: Reg, rhs: i32| {
                 if rhs == i32::MIN {
                     // Optimization: `x >= MIN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1497,7 +1351,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == i32::MAX {
                     // Optimization: `MAX >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1514,7 +1368,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_ge_u_imm16,
             swap_ops!(Instruction::i32_le_u_imm16),
             TypedVal::i32_ge_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1522,7 +1376,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u32| {
+            |this, _lhs: Reg, rhs: u32| {
                 if rhs == u32::MIN {
                     // Optimization: `x >= MIN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1530,7 +1384,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u32, _rhs: Register| {
+            |this, lhs: u32, _rhs: Reg| {
                 if lhs == u32::MAX {
                     // Optimization: `MAX >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1553,7 +1407,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_eq,
             Instruction::i64_eq_imm16,
             TypedVal::i64_eq,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x == x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1570,7 +1424,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_ne,
             Instruction::i64_ne_imm16,
             TypedVal::i64_ne,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x != x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1588,7 +1442,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_lt_s_imm16,
             swap_ops!(Instruction::i64_gt_s_imm16),
             TypedVal::i64_lt_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1596,7 +1450,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i64| {
+            |this, _lhs: Reg, rhs: i64| {
                 if rhs == i64::MIN {
                     // Optimization: `x < MIN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1604,7 +1458,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == i64::MAX {
                     // Optimization: `MAX < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1621,7 +1475,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_lt_u_imm16,
             swap_ops!(Instruction::i64_gt_u_imm16),
             TypedVal::i64_lt_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1629,7 +1483,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u64| {
+            |this, _lhs: Reg, rhs: u64| {
                 if rhs == u64::MIN {
                     // Optimization: `x < MIN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1637,7 +1491,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u64, _rhs: Register| {
+            |this, lhs: u64, _rhs: Reg| {
                 if lhs == u64::MAX {
                     // Optimization: `MAX < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1654,7 +1508,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_gt_s_imm16,
             swap_ops!(Instruction::i64_lt_s_imm16),
             TypedVal::i64_gt_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1662,7 +1516,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i64| {
+            |this, _lhs: Reg, rhs: i64| {
                 if rhs == i64::MAX {
                     // Optimization: `x > MAX` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1670,7 +1524,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == i64::MIN {
                     // Optimization: `MIN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1687,7 +1541,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_gt_u_imm16,
             swap_ops!(Instruction::i64_lt_u_imm16),
             TypedVal::i64_gt_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1695,7 +1549,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u64| {
+            |this, _lhs: Reg, rhs: u64| {
                 if rhs == u64::MAX {
                     // Optimization: `x > MAX` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1703,7 +1557,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u64, _rhs: Register| {
+            |this, lhs: u64, _rhs: Reg| {
                 if lhs == u64::MIN {
                     // Optimization: `MIN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1720,7 +1574,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_le_s_imm16,
             swap_ops!(Instruction::i64_ge_s_imm16),
             TypedVal::i64_le_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1728,7 +1582,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i64| {
+            |this, _lhs: Reg, rhs: i64| {
                 if rhs == i64::MAX {
                     // Optimization: `x <= MAX` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1736,7 +1590,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == i64::MIN {
                     // Optimization: `MIN <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1753,7 +1607,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_le_u_imm16,
             swap_ops!(Instruction::i64_ge_u_imm16),
             TypedVal::i64_le_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1761,7 +1615,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u64| {
+            |this, _lhs: Reg, rhs: u64| {
                 if rhs == u64::MAX {
                     // Optimization: `x <= MAX` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1769,7 +1623,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u64, _rhs: Register| {
+            |this, lhs: u64, _rhs: Reg| {
                 if lhs == u64::MIN {
                     // Optimization: `MIN <= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1786,7 +1640,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_ge_s_imm16,
             swap_ops!(Instruction::i64_le_s_imm16),
             TypedVal::i64_ge_s,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1794,7 +1648,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: i64| {
+            |this, _lhs: Reg, rhs: i64| {
                 if rhs == i64::MIN {
                     // Optimization: `x >= MIN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1802,7 +1656,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == i64::MAX {
                     // Optimization: `MAX >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1819,7 +1673,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_ge_u_imm16,
             swap_ops!(Instruction::i64_le_u_imm16),
             TypedVal::i64_ge_u,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1827,7 +1681,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: u64| {
+            |this, _lhs: Reg, rhs: u64| {
                 if rhs == u64::MIN {
                     // Optimization: `x >= MIN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1835,7 +1689,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: u64, _rhs: Register| {
+            |this, lhs: u64, _rhs: Reg| {
                 if lhs == u64::MAX {
                     // Optimization: `MAX >= x` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1851,7 +1705,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_eq,
             TypedVal::f32_eq,
             Self::no_custom_opt,
-            |this, _reg_in: Register, imm_in: f32| {
+            |this, _reg_in: Reg, imm_in: f32| {
                 if imm_in.is_nan() {
                     // Optimization: `NaN == x` or `x == NaN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1867,7 +1721,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_ne,
             TypedVal::f32_ne,
             Self::no_custom_opt,
-            |this, _reg_in: Register, imm_in: f32| {
+            |this, _reg_in: Reg, imm_in: f32| {
                 if imm_in.is_nan() {
                     // Optimization: `NaN != x` or `x != NaN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -1882,7 +1736,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fbinary(
             Instruction::f32_lt,
             TypedVal::f32_lt,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1890,7 +1744,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: f32| {
+            |this, _lhs: Reg, rhs: f32| {
                 if rhs.is_nan() {
                     // Optimization: `x < NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1903,7 +1757,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f32, _rhs: Register| {
+            |this, lhs: f32, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1923,7 +1777,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fbinary(
             Instruction::f32_gt,
             TypedVal::f32_gt,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1931,7 +1785,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: f32| {
+            |this, _lhs: Reg, rhs: f32| {
                 if rhs.is_nan() {
                     // Optimization: `x > NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1944,7 +1798,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f32, _rhs: Register| {
+            |this, lhs: f32, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1965,7 +1819,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_le,
             TypedVal::f32_le,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: f32| {
+            |this, _lhs: Reg, rhs: f32| {
                 if rhs.is_nan() {
                     // Optimization: `x <= NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1973,7 +1827,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f32, _rhs: Register| {
+            |this, lhs: f32, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN <= x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1989,7 +1843,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_ge,
             TypedVal::f32_ge,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: f32| {
+            |this, _lhs: Reg, rhs: f32| {
                 if rhs.is_nan() {
                     // Optimization: `x >= NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -1997,7 +1851,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f32, _rhs: Register| {
+            |this, lhs: f32, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN >= x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2013,7 +1867,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_eq,
             TypedVal::f64_eq,
             Self::no_custom_opt,
-            |this, _reg_in: Register, imm_in: f64| {
+            |this, _reg_in: Reg, imm_in: f64| {
                 if imm_in.is_nan() {
                     // Optimization: `NaN == x` or `x == NaN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2029,7 +1883,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_ne,
             TypedVal::f64_ne,
             Self::no_custom_opt,
-            |this, _reg_in: Register, imm_in: f64| {
+            |this, _reg_in: Reg, imm_in: f64| {
                 if imm_in.is_nan() {
                     // Optimization: `NaN != x` or `x != NaN` is always `true`
                     this.alloc.stack.push_const(true);
@@ -2044,7 +1898,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fbinary(
             Instruction::f64_lt,
             TypedVal::f64_lt,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2052,7 +1906,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: f64| {
+            |this, _lhs: Reg, rhs: f64| {
                 if rhs.is_nan() {
                     // Optimization: `x < NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2065,7 +1919,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f64, _rhs: Register| {
+            |this, lhs: f64, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN < x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2085,7 +1939,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_fbinary(
             Instruction::f64_gt,
             TypedVal::f64_gt,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `x > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2093,7 +1947,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, _lhs: Register, rhs: f64| {
+            |this, _lhs: Reg, rhs: f64| {
                 if rhs.is_nan() {
                     // Optimization: `x > NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2106,7 +1960,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f64, _rhs: Register| {
+            |this, lhs: f64, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN > x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2127,7 +1981,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_le,
             TypedVal::f64_le,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: f64| {
+            |this, _lhs: Reg, rhs: f64| {
                 if rhs.is_nan() {
                     // Optimization: `x <= NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2135,7 +1989,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f64, _rhs: Register| {
+            |this, lhs: f64, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN <= x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2151,7 +2005,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_ge,
             TypedVal::f64_ge,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: f64| {
+            |this, _lhs: Reg, rhs: f64| {
                 if rhs.is_nan() {
                     // Optimization: `x >= NAN` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2159,7 +2013,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: f64, _rhs: Register| {
+            |this, lhs: f64, _rhs: Reg| {
                 if lhs.is_nan() {
                     // Optimization: `NAN >= x` is always `false`
                     this.alloc.stack.push_const(false);
@@ -2188,7 +2042,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_add_imm16,
             TypedVal::i32_add,
             Self::no_custom_opt,
-            |this, reg: Register, value: i32| {
+            |this, reg: Reg, value: i32| {
                 if value == 0 {
                     // Optimization: `add x + 0` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2203,9 +2057,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary(
             Instruction::i32_sub,
             |_, _, _| unreachable!("`i32.sub r c` is translated as `i32.add r -c`"),
-            Instruction::i32_sub_imm16_rev,
+            Instruction::i32_sub_imm16_lhs,
             TypedVal::i32_sub,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `sub x - x` is always `0`
                     this.alloc.stack.push_const(0_i32);
@@ -2213,7 +2067,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: Register, rhs: i32| {
+            |this, lhs: Reg, rhs: i32| {
                 if rhs == 0 {
                     // Optimization: `sub x - 0` is same as `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2240,7 +2094,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i32_mul_imm16,
             TypedVal::i32_mul,
             Self::no_custom_opt,
-            |this, reg: Register, value: i32| {
+            |this, reg: Reg, value: i32| {
                 if value == 0 {
                     // Optimization: `add x * 0` is always `0`
                     this.alloc.stack.push_const(0_i32);
@@ -2259,11 +2113,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_div_s(&mut self) -> Self::Output {
         self.translate_divrem(
             Instruction::i32_div_s,
-            Instruction::i32_div_s_imm16,
-            Instruction::i32_div_s_imm16_rev,
+            Instruction::i32_div_s_imm16_rhs,
+            Instruction::i32_div_s_imm16_lhs,
             TypedVal::i32_div_s,
             Self::no_custom_opt,
-            |this, lhs: Register, rhs: i32| {
+            |this, lhs: Reg, rhs: i32| {
                 if rhs == 1 {
                     // Optimization: `x / 1` is always `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2277,11 +2131,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_div_u(&mut self) -> Self::Output {
         self.translate_divrem::<u32, NonZeroU32>(
             Instruction::i32_div_u,
-            Instruction::i32_div_u_imm16,
-            Instruction::i32_div_u_imm16_rev,
+            Instruction::i32_div_u_imm16_rhs,
+            Instruction::i32_div_u_imm16_lhs,
             TypedVal::i32_div_u,
             Self::no_custom_opt,
-            |this, lhs: Register, rhs: u32| {
+            |this, lhs: Reg, rhs: u32| {
                 if rhs == 1 {
                     // Optimization: `x / 1` is always `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2295,11 +2149,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_rem_s(&mut self) -> Self::Output {
         self.translate_divrem(
             Instruction::i32_rem_s,
-            Instruction::i32_rem_s_imm16,
-            Instruction::i32_rem_s_imm16_rev,
+            Instruction::i32_rem_s_imm16_rhs,
+            Instruction::i32_rem_s_imm16_lhs,
             TypedVal::i32_rem_s,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: i32| {
+            |this, _lhs: Reg, rhs: i32| {
                 if rhs == 1 || rhs == -1 {
                     // Optimization: `x % 1` or `x % -1` is always `0`
                     this.alloc.stack.push_const(0_i32);
@@ -2313,11 +2167,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_rem_u(&mut self) -> Self::Output {
         self.translate_divrem::<u32, NonZeroU32>(
             Instruction::i32_rem_u,
-            Instruction::i32_rem_u_imm16,
-            Instruction::i32_rem_u_imm16_rev,
+            Instruction::i32_rem_u_imm16_rhs,
+            Instruction::i32_rem_u_imm16_lhs,
             TypedVal::i32_rem_u,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: u32| {
+            |this, _lhs: Reg, rhs: u32| {
                 if rhs == 1 {
                     // Optimization: `x % 1` is always `0`
                     this.alloc.stack.push_const(0_i32);
@@ -2341,7 +2195,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i32| {
+            |this, reg: Reg, value: i32| {
                 if value == -1 {
                     // Optimization: `x & -1` is same as `x`
                     //
@@ -2373,7 +2227,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i32| {
+            |this, reg: Reg, value: i32| {
                 if value == -1 {
                     // Optimization: `x | -1` is same as `-1`
                     //
@@ -2405,7 +2259,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i32| {
+            |this, reg: Reg, value: i32| {
                 if value == 0 {
                     // Optimization: `x ^ 0` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2419,8 +2273,8 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_shl(&mut self) -> Self::Output {
         self.translate_shift::<i32>(
             Instruction::i32_shl,
-            Instruction::i32_shl_imm,
-            Instruction::i32_shl_imm16_rev,
+            Instruction::i32_shl_by,
+            Instruction::i32_shl_imm16,
             TypedVal::i32_shl,
             Self::no_custom_opt,
         )
@@ -2429,10 +2283,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_shr_s(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i32_shr_s,
-            Instruction::i32_shr_s_imm,
-            Instruction::i32_shr_s_imm16_rev,
+            Instruction::i32_shr_s_by,
+            Instruction::i32_shr_s_imm16,
             TypedVal::i32_shr_s,
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2446,8 +2300,8 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_shr_u(&mut self) -> Self::Output {
         self.translate_shift::<i32>(
             Instruction::i32_shr_u,
-            Instruction::i32_shr_u_imm,
-            Instruction::i32_shr_u_imm16_rev,
+            Instruction::i32_shr_u_by,
+            Instruction::i32_shr_u_imm16,
             TypedVal::i32_shr_u,
             Self::no_custom_opt,
         )
@@ -2456,10 +2310,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_rotl(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i32_rotl,
-            Instruction::i32_rotl_imm,
-            Instruction::i32_rotl_imm16_rev,
+            Instruction::i32_rotl_by,
+            Instruction::i32_rotl_imm16,
             TypedVal::i32_rotl,
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1.rotate_left(x)` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2473,10 +2327,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i32_rotr(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i32_rotr,
-            Instruction::i32_rotr_imm,
-            Instruction::i32_rotr_imm16_rev,
+            Instruction::i32_rotr_by,
+            Instruction::i32_rotr_imm16,
             TypedVal::i32_rotr,
-            |this, lhs: i32, _rhs: Register| {
+            |this, lhs: i32, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1.rotate_right(x)` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2505,7 +2359,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_add_imm16,
             TypedVal::i64_add,
             Self::no_custom_opt,
-            |this, reg: Register, value: i64| {
+            |this, reg: Reg, value: i64| {
                 if value == 0 {
                     // Optimization: `add x + 0` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2520,9 +2374,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.translate_binary(
             Instruction::i64_sub,
             |_, _, _| unreachable!("`i64.sub r c` is translated as `i64.add r -c`"),
-            Instruction::i64_sub_imm16_rev,
+            Instruction::i64_sub_imm16_lhs,
             TypedVal::i64_sub,
-            |this, lhs: Register, rhs: Register| {
+            |this, lhs: Reg, rhs: Reg| {
                 if lhs == rhs {
                     // Optimization: `sub x - x` is always `0`
                     this.alloc.stack.push_const(0_i64);
@@ -2530,7 +2384,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, lhs: Register, rhs: i64| {
+            |this, lhs: Reg, rhs: i64| {
                 if rhs == 0 {
                     // Optimization: `sub x - 0` is same as `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2557,7 +2411,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::i64_mul_imm16,
             TypedVal::i64_mul,
             Self::no_custom_opt,
-            |this, reg: Register, value: i64| {
+            |this, reg: Reg, value: i64| {
                 if value == 0 {
                     // Optimization: `add x * 0` is always `0`
                     this.alloc.stack.push_const(0_i64);
@@ -2576,11 +2430,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_div_s(&mut self) -> Self::Output {
         self.translate_divrem(
             Instruction::i64_div_s,
-            Instruction::i64_div_s_imm16,
-            Instruction::i64_div_s_imm16_rev,
+            Instruction::i64_div_s_imm16_rhs,
+            Instruction::i64_div_s_imm16_lhs,
             TypedVal::i64_div_s,
             Self::no_custom_opt,
-            |this, lhs: Register, rhs: i64| {
+            |this, lhs: Reg, rhs: i64| {
                 if rhs == 1 {
                     // Optimization: `x / 1` is always `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2594,11 +2448,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_div_u(&mut self) -> Self::Output {
         self.translate_divrem::<u64, NonZeroU64>(
             Instruction::i64_div_u,
-            Instruction::i64_div_u_imm16,
-            Instruction::i64_div_u_imm16_rev,
+            Instruction::i64_div_u_imm16_rhs,
+            Instruction::i64_div_u_imm16_lhs,
             TypedVal::i64_div_u,
             Self::no_custom_opt,
-            |this, lhs: Register, rhs: u64| {
+            |this, lhs: Reg, rhs: u64| {
                 if rhs == 1 {
                     // Optimization: `x / 1` is always `x`
                     this.alloc.stack.push_register(lhs)?;
@@ -2612,11 +2466,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_rem_s(&mut self) -> Self::Output {
         self.translate_divrem(
             Instruction::i64_rem_s,
-            Instruction::i64_rem_s_imm16,
-            Instruction::i64_rem_s_imm16_rev,
+            Instruction::i64_rem_s_imm16_rhs,
+            Instruction::i64_rem_s_imm16_lhs,
             TypedVal::i64_rem_s,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: i64| {
+            |this, _lhs: Reg, rhs: i64| {
                 if rhs == 1 || rhs == -1 {
                     // Optimization: `x % 1` or `x % -1` is always `0`
                     this.alloc.stack.push_const(0_i64);
@@ -2630,11 +2484,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_rem_u(&mut self) -> Self::Output {
         self.translate_divrem::<u64, NonZeroU64>(
             Instruction::i64_rem_u,
-            Instruction::i64_rem_u_imm16,
-            Instruction::i64_rem_u_imm16_rev,
+            Instruction::i64_rem_u_imm16_rhs,
+            Instruction::i64_rem_u_imm16_lhs,
             TypedVal::i64_rem_u,
             Self::no_custom_opt,
-            |this, _lhs: Register, rhs: u64| {
+            |this, _lhs: Reg, rhs: u64| {
                 if rhs == 1 {
                     // Optimization: `x % 1` is always `0`
                     this.alloc.stack.push_const(0_i64);
@@ -2658,7 +2512,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i64| {
+            |this, reg: Reg, value: i64| {
                 if value == -1 {
                     // Optimization: `x & -1` is same as `x`
                     //
@@ -2690,7 +2544,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i64| {
+            |this, reg: Reg, value: i64| {
                 if value == -1 {
                     // Optimization: `x | -1` is same as `-1`
                     //
@@ -2722,7 +2576,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
                 }
                 Ok(false)
             },
-            |this, reg: Register, value: i64| {
+            |this, reg: Reg, value: i64| {
                 if value == 0 {
                     // Optimization: `x ^ 0` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2736,8 +2590,8 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_shl(&mut self) -> Self::Output {
         self.translate_shift::<i64>(
             Instruction::i64_shl,
-            Instruction::i64_shl_imm,
-            Instruction::i64_shl_imm16_rev,
+            Instruction::i64_shl_by,
+            Instruction::i64_shl_imm16,
             TypedVal::i64_shl,
             Self::no_custom_opt,
         )
@@ -2746,10 +2600,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_shr_s(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i64_shr_s,
-            Instruction::i64_shr_s_imm,
-            Instruction::i64_shr_s_imm16_rev,
+            Instruction::i64_shr_s_by,
+            Instruction::i64_shr_s_imm16,
             TypedVal::i64_shr_s,
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2763,8 +2617,8 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_shr_u(&mut self) -> Self::Output {
         self.translate_shift::<i64>(
             Instruction::i64_shr_u,
-            Instruction::i64_shr_u_imm,
-            Instruction::i64_shr_u_imm16_rev,
+            Instruction::i64_shr_u_by,
+            Instruction::i64_shr_u_imm16,
             TypedVal::i64_shr_u,
             Self::no_custom_opt,
         )
@@ -2773,10 +2627,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_rotl(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i64_rotl,
-            Instruction::i64_rotl_imm,
-            Instruction::i64_rotl_imm16_rev,
+            Instruction::i64_rotl_by,
+            Instruction::i64_rotl_imm16,
             TypedVal::i64_rotl,
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2790,10 +2644,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     fn visit_i64_rotr(&mut self) -> Self::Output {
         self.translate_shift(
             Instruction::i64_rotr,
-            Instruction::i64_rotr_imm,
-            Instruction::i64_rotr_imm16_rev,
+            Instruction::i64_rotr_by,
+            Instruction::i64_rotr_imm16,
             TypedVal::i64_rotr,
-            |this, lhs: i64, _rhs: Register| {
+            |this, lhs: i64, _rhs: Reg| {
                 if lhs == -1 {
                     // Optimization: `-1 >> x` is always `-1` for every valid `x`
                     this.alloc.stack.push_const(lhs);
@@ -2837,7 +2691,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_add,
             TypedVal::f32_add,
             Self::no_custom_opt,
-            Self::no_custom_opt::<Register, f32>,
+            Self::no_custom_opt::<Reg, f32>,
         )
     }
 
@@ -2846,7 +2700,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_sub,
             TypedVal::f32_sub,
             Self::no_custom_opt,
-            Self::no_custom_opt::<Register, f32>,
+            Self::no_custom_opt::<Reg, f32>,
             // Unfortunately we cannot optimize for the case that `lhs == 0.0`
             // since the Wasm specification mandates different behavior in
             // dependence of `rhs` which we do not know at this point.
@@ -2881,7 +2735,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_min,
             TypedVal::f32_min,
             Self::no_custom_opt,
-            |this, reg: Register, value: f32| {
+            |this, reg: Reg, value: f32| {
                 if value.is_infinite() && value.is_sign_positive() {
                     // Optimization: `min(x, +inf)` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2897,7 +2751,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f32_max,
             TypedVal::f32_max,
             Self::no_custom_opt,
-            |this, reg: Register, value: f32| {
+            |this, reg: Reg, value: f32| {
                 if value.is_infinite() && value.is_sign_negative() {
                     // Optimization: `max(x, -inf)` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -2949,7 +2803,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_add,
             TypedVal::f64_add,
             Self::no_custom_opt,
-            Self::no_custom_opt::<Register, f64>,
+            Self::no_custom_opt::<Reg, f64>,
         )
     }
 
@@ -2958,7 +2812,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_sub,
             TypedVal::f64_sub,
             Self::no_custom_opt,
-            Self::no_custom_opt::<Register, f64>,
+            Self::no_custom_opt::<Reg, f64>,
             // Unfortunately we cannot optimize for the case that `lhs == 0.0`
             // since the Wasm specification mandates different behavior in
             // dependence of `rhs` which we do not know at this point.
@@ -2993,7 +2847,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_min,
             TypedVal::f64_min,
             Self::no_custom_opt,
-            |this, reg: Register, value: f64| {
+            |this, reg: Reg, value: f64| {
                 if value.is_infinite() && value.is_sign_positive() {
                     // Optimization: `min(x, +inf)` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -3009,7 +2863,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             Instruction::f64_max,
             TypedVal::f64_max,
             Self::no_custom_opt,
-            |this, reg: Register, value: f64| {
+            |this, reg: Reg, value: f64| {
                 if value.is_infinite() && value.is_sign_negative() {
                     // Optimization: `min(x, +inf)` is same as `x`
                     this.alloc.stack.push_register(reg)?;
@@ -3049,11 +2903,11 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
     }
 
     fn visit_i64_extend_i32_s(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend_i32_s, TypedVal::i64_extend_i32_s)
+        self.translate_unary(Instruction::i64_extend32_s, TypedVal::i64_extend_i32_s)
     }
 
     fn visit_i64_extend_i32_u(&mut self) -> Self::Output {
-        self.translate_unary(Instruction::i64_extend_i32_u, TypedVal::i64_extend_i32_u)
+        self.translate_i64_extend_i32_u()
     }
 
     fn visit_i64_trunc_f32_s(&mut self) -> Self::Output {
@@ -3204,8 +3058,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         )
     }
 
-    fn visit_memory_init(&mut self, data_index: u32, _mem: u32) -> Self::Output {
+    fn visit_memory_init(&mut self, data_index: u32, mem: u32) -> Self::Output {
         bail_unreachable!(self);
+        let memory = index::Memory::from(mem);
         let (dst, src, len) = self.alloc.stack.pop3();
         let dst = <Provider<Const16<u32>>>::new(dst, &mut self.alloc.stack)?;
         let src = <Provider<Const16<u32>>>::new(src, &mut self.alloc.stack)?;
@@ -3239,18 +3094,23 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::data_idx(data_index))?;
+            .append_instr(Instruction::memory_index(memory))?;
+        self.alloc
+            .instr_encoder
+            .append_instr(Instruction::data_index(data_index))?;
         Ok(())
     }
 
     fn visit_data_drop(&mut self, data_index: u32) -> Self::Output {
         bail_unreachable!(self);
-        self.push_fueled_instr(Instruction::DataDrop(data_index.into()), FuelCosts::entity)?;
+        self.push_fueled_instr(Instruction::data_drop(data_index), FuelCosts::entity)?;
         Ok(())
     }
 
-    fn visit_memory_copy(&mut self, _dst_mem: u32, _src_mem: u32) -> Self::Output {
+    fn visit_memory_copy(&mut self, dst_mem: u32, src_mem: u32) -> Self::Output {
         bail_unreachable!(self);
+        let dst_memory = index::Memory::from(dst_mem);
+        let src_memory = index::Memory::from(src_mem);
         let (dst, src, len) = self.alloc.stack.pop3();
         let dst = <Provider<Const16<u32>>>::new(dst, &mut self.alloc.stack)?;
         let src = <Provider<Const16<u32>>>::new(src, &mut self.alloc.stack)?;
@@ -3282,14 +3142,21 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             }
         };
         self.push_fueled_instr(instr, FuelCosts::entity)?;
+        self.alloc
+            .instr_encoder
+            .append_instr(Instruction::memory_index(dst_memory))?;
+        self.alloc
+            .instr_encoder
+            .append_instr(Instruction::memory_index(src_memory))?;
         Ok(())
     }
 
-    fn visit_memory_fill(&mut self, _mem: u32) -> Self::Output {
+    fn visit_memory_fill(&mut self, mem: u32) -> Self::Output {
         bail_unreachable!(self);
+        let memory = index::Memory::from(mem);
         let (dst, value, len) = self.alloc.stack.pop3();
         let dst = <Provider<Const16<u32>>>::new(dst, &mut self.alloc.stack)?;
-        let value = <Provider<u8>>::new(value);
+        let value = value.map_const(|value| u32::from(value) as u8);
         let len = <Provider<Const16<u32>>>::new(len, &mut self.alloc.stack)?;
         let instr = match (dst, value, len) {
             (Provider::Register(dst), Provider::Register(value), Provider::Register(len)) => {
@@ -3318,6 +3185,9 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
             }
         };
         self.push_fueled_instr(instr, FuelCosts::entity)?;
+        self.alloc
+            .instr_encoder
+            .append_instr(Instruction::memory_index(memory))?;
         Ok(())
     }
 
@@ -3356,16 +3226,16 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(table))?;
+            .append_instr(Instruction::table_index(table))?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::elem_idx(elem_index))?;
+            .append_instr(Instruction::elem_index(elem_index))?;
         Ok(())
     }
 
     fn visit_elem_drop(&mut self, elem_index: u32) -> Self::Output {
         bail_unreachable!(self);
-        self.push_fueled_instr(Instruction::ElemDrop(elem_index.into()), FuelCosts::entity)?;
+        self.push_fueled_instr(Instruction::elem_drop(elem_index), FuelCosts::entity)?;
         Ok(())
     }
 
@@ -3404,10 +3274,10 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(dst_table))?;
+            .append_instr(Instruction::table_index(dst_table))?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(src_table))?;
+            .append_instr(Instruction::table_index(src_table))?;
         Ok(())
     }
 
@@ -3437,7 +3307,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(table))?;
+            .append_instr(Instruction::table_index(table))?;
         Ok(())
     }
 
@@ -3458,7 +3328,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         }
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(table))?;
+            .append_instr(Instruction::table_index(table))?;
         Ok(())
     }
 
@@ -3471,12 +3341,12 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         };
         let instr = match index {
             TypedProvider::Register(index) => Instruction::table_set(index, value),
-            TypedProvider::Const(index) => Instruction::table_set_at(u32::from(index), value),
+            TypedProvider::Const(index) => Instruction::table_set_at(value, u32::from(index)),
         };
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(table))?;
+            .append_instr(Instruction::table_index(table))?;
         Ok(())
     }
 
@@ -3508,7 +3378,7 @@ impl<'a> VisitOperator<'a> for FuncTranslator {
         self.push_fueled_instr(instr, FuelCosts::entity)?;
         self.alloc
             .instr_encoder
-            .append_instr(Instruction::table_idx(table))?;
+            .append_instr(Instruction::table_index(table))?;
         Ok(())
     }
 
