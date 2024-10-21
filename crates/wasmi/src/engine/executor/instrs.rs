@@ -15,6 +15,8 @@ use crate::{
     table::ElementSegment,
     Error, Func, FuncRef, Global, Memory, Store, Table,
 };
+use std::{vec, vec::Vec};
+
 
 #[cfg(doc)]
 use crate::Instance;
@@ -296,18 +298,42 @@ impl<'engine> Executor<'engine> {
                 Instr::BranchI64GeUImm { lhs, .. } => {
                     self.get_register(lhs).to_bits() ^ 0x93f90f4418d24385
                 }
-                Instr::BranchF32Eq { lhs, .. } => 0x8647b33a7b8d4ea9, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF32Ne { lhs, .. } => 0x9efcbece1096b201, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF32Lt { lhs, .. } => 0xb2ab8327611d4843, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF32Le { lhs, .. } => 0xfdb94010ae03ebad, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF32Gt { lhs, .. } => 0xc74489c6752ef2e3, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF32Ge { lhs, .. } => 0xb2588add33b6dc8d, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::BranchF64Eq { lhs, .. } => 0xb0f911188eef530b, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::BranchF64Ne { lhs, .. } => 0xb3a436328722e3af, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::BranchF64Lt { lhs, .. } => 0x996ae1e7999d71a5, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::BranchF64Le { lhs, .. } => 0xb00795c450f79fd7, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::BranchF64Gt { lhs, .. } => 0xfd0f65f70976783f, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::BranchF64Ge { lhs, .. } => 0xab728f867409f623, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
+                Instr::BranchF32Eq { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x8647b33a7b8d4ea9
+                }
+                Instr::BranchF32Ne { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x9efcbece1096b201
+                }
+                Instr::BranchF32Lt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xb2ab8327611d4843
+                }
+                Instr::BranchF32Le { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xfdb94010ae03ebad 
+                }
+                Instr::BranchF32Gt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xc74489c6752ef2e3
+                }
+                Instr::BranchF32Ge { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xb2588add33b6dc8d
+                }
+                Instr::BranchF64Eq { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xb0f911188eef530b
+                }
+                Instr::BranchF64Ne { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xb3a436328722e3af
+                }
+                Instr::BranchF64Lt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x996ae1e7999d71a5
+                }
                 Instr::Copy { .. } => 0xf476618f2886dc2f,
                 Instr::Copy2 { .. } => 0x81e0ef8904c1cfd5,
                 Instr::CopyImm32 { .. } => 0xaafc797a3f40deeb,
@@ -557,18 +583,57 @@ impl<'engine> Executor<'engine> {
                 Instr::I64GeUImm16 { lhs, .. } => {
                     self.get_register(lhs).to_bits() ^ 0xe11e8b930ba0afed
                 }
-                Instr::F32Eq { lhs, .. } => 0xc3587b028ec7b7d7, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Eq { lhs, .. } => 0x90fa962604933679, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Ne { lhs, .. } => 0xe8b028b8a40b6323, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Ne { lhs, .. } => 0xe511c632ed75d0ad, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Lt { lhs, .. } => 0xafe8adc3497d922f, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Lt { lhs, .. } => 0xa24d51fe3b08563d, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Le { lhs, .. } => 0xa9470d623de1df2f, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Le { lhs, .. } => 0xe5e889a7f2d74d67, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Gt { lhs, .. } => 0x8cbe5aa7efd2dac5, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Gt { lhs, .. } => 0xa2b5a501d74cc69b, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Ge { lhs, .. } => 0x9103bfb43045fc5b, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Ge { lhs, .. } => 0xe4832a9c5a4a0741, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
+                Instr::F32Eq { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xc3587b028ec7b7d7
+                }
+                Instr::F64Eq { lhs, .. } =>
+                {
+                    self.get_register(lhs).to_bits() ^ 0x90fa962604933679
+                }
+                Instr::F32Ne { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xe8b028b8a40b6323
+                }
+                Instr::F64Ne { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xe511c632ed75d0ad 
+                }
+                Instr::F32Lt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xafe8adc3497d922f 
+                }
+                Instr::F64Lt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xa24d51fe3b08563d 
+                }
+                Instr::F32Le { lhs, .. } => 
+                {
+                    // note: if we mix lhs into our signature here it starts to differ across x86/arm.
+                    // lhs on arm is different than on x86.
+                    // seems to be limited to this instruction only from my testing (strange?)
+                    0xa9470d623de1df2f
+                }
+                Instr::F64Le { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xe5e889a7f2d74d67
+                }
+                Instr::F32Gt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x8cbe5aa7efd2dac5
+                }
+                Instr::F64Gt { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xa2b5a501d74cc69b 
+                }
+                Instr::F32Ge { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x9103bfb43045fc5b
+                }
+                Instr::F64Ge { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xe4832a9c5a4a0741 
+                }
                 Instr::I32Clz { input, .. } => {
                     self.get_register(input).to_bits() ^ 0xd0b363eee33e2a75
                 }
@@ -665,55 +730,193 @@ impl<'engine> Executor<'engine> {
                 Instr::I64Rotl { lhs, .. } => self.get_register(lhs).to_bits() ^ 0xc2c0280be48f6e2b,
                 Instr::I32Rotr { lhs, .. } => self.get_register(lhs).to_bits() ^ 0xfce450167abfef91,
                 Instr::I64Rotr { lhs, .. } => self.get_register(lhs).to_bits() ^ 0xd35af32013838db5,
-                Instr::F32Abs { input, .. } => 0xcd5c2fff391d82cb, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Abs { input, .. } => 0xc4736057bf6ce827, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Neg { input, .. } => 0xd366f959bf938435, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Neg { input, .. } => 0x8c01a158032456c5, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Ceil { input, .. } => 0xf5684f567a1e5c81, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Ceil { input, .. } => 0xbc6729b56b5bf64f, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Floor { input, .. } => 0xc3397446971c7b1b, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Floor { input, .. } => 0xc21648fabc149443, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Trunc { input, .. } => 0x930c87d1457a0b2f, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Trunc { input, .. } => 0xc457947a5515448d, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Nearest { input, .. } => 0xdcbd8018d58a0133, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Nearest { input, .. } => 0xe719d229d8dc9d11, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Sqrt { input, .. } => 0x8e031a9674797f6f, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64Sqrt { input, .. } => 0xede241e1bdbf8add, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::F32Add { lhs, .. } => 0xc0246fd5a4fa2569, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Add { lhs, .. } => 0xae61b186b8d627b1, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Sub { lhs, .. } => 0xf37398a1108c36cb, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Sub { lhs, .. } => 0xaaf86176c0dc89f5, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Mul { lhs, .. } => 0xbe5eb79b83c0c7b1, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Mul { lhs, .. } => 0x9b200d1c1640bf0d, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Div { lhs, .. } => 0xd22d29503c878647, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Div { lhs, .. } => 0x91b08c54e524bb09, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Min { lhs, .. } => 0xf83af276dd4b617f, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Min { lhs, .. } => 0xeb5d7d82375f7be7, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Max { lhs, .. } => 0x8f4d06f60f1c84fb, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Max { lhs, .. } => 0xb24f6877be71ebd5, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32Copysign { lhs, .. } => 0xec122620e993dfcd, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64Copysign { lhs, .. } => 0xf27f1850006566c9, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
-                Instr::F32CopysignImm { lhs, .. } => 0x94d19450082a4ce9, // FIXME self.get_register(lhs).f32_convert_i64_s().to_bits()
-                Instr::F64CopysignImm { lhs, .. } => 0x84b094c8c0503805, // FIXME self.get_register(lhs).f64_convert_i64_s().to_bits()
+                Instr::F32Abs { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xcd5c2fff391d82cb
+                }
+                Instr::F64Abs { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xc4736057bf6ce827
+                }
+                Instr::F32Neg { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xd366f959bf938435
+                }
+                Instr::F64Neg { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0x8c01a158032456c5
+                }
+                Instr::F32Ceil { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xf5684f567a1e5c81
+                }
+                Instr::F64Ceil { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xbc6729b56b5bf64f
+                }
+                Instr::F32Floor { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xc3397446971c7b1b
+                }
+                Instr::F64Floor { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xc21648fabc149443 
+                }
+                Instr::F32Trunc { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0x930c87d1457a0b2f
+                }
+                Instr::F64Trunc { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xc457947a5515448d 
+                }
+                Instr::F32Nearest { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xdcbd8018d58a0133 
+                }
+                Instr::F64Nearest { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xe719d229d8dc9d11
+                }
+                Instr::F32Sqrt { input, .. } =>
+                {
+                    self.get_register(input).to_bits() ^ 0x8e031a9674797f6f
+                }
+                Instr::F64Sqrt { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xede241e1bdbf8add 
+                }
+                Instr::F32Add { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xc0246fd5a4fa2569 
+                }
+                Instr::F64Add { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xae61b186b8d627b1 
+                }
+                Instr::F32Sub { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xf37398a1108c36cb
+                }
+                Instr::F64Sub { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xaaf86176c0dc89f5
+                }
+                Instr::F32Mul { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xbe5eb79b83c0c7b1 
+                }
+                Instr::F64Mul { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x9b200d1c1640bf0d 
+                }
+                Instr::F32Div { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xd22d29503c878647 
+                }
+                Instr::F64Div { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x91b08c54e524bb09 
+                }
+                Instr::F32Min { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xf83af276dd4b617f 
+                }
+                Instr::F64Min { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xeb5d7d82375f7be7
+                }
+                Instr::F32Max { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x8f4d06f60f1c84fb 
+                }
+                Instr::F64Max { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xb24f6877be71ebd5 
+                }
+                Instr::F32Copysign { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xec122620e993dfcd
+                }
+                Instr::F64Copysign { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0xf27f1850006566c9 
+                }
+                Instr::F32CopysignImm { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x94d19450082a4ce9 
+                }
+                Instr::F64CopysignImm { lhs, .. } => 
+                {
+                    self.get_register(lhs).to_bits() ^ 0x84b094c8c0503805
+                }
                 Instr::I32WrapI64 { input, .. } => {
                     self.get_register(input).to_bits() ^ 0xd7348da1051ffdf5
                 }
-                Instr::I32TruncF32S { input, .. } => 0xa8edf1813c31175b, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I32TruncF32U { input, .. } => 0xf980305a8ba3be0f, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I32TruncF64S { input, .. } => 0xb982c8f45dcd5731, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I32TruncF64U { input, .. } => 0x9ca1670d1e934f45, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I64TruncF32S { input, .. } => 0xeb2506c7a7cfe6f7, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I64TruncF32U { input, .. } => 0xa230e0381f36668d, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I64TruncF64S { input, .. } => 0xce02765ab94df325, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I64TruncF64U { input, .. } => 0xb39253799e21a72d, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I32TruncSatF32S { input, .. } => 0xa164fb50eec581d3, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I32TruncSatF32U { input, .. } => 0xabac89637bdb1d8f, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I32TruncSatF64S { input, .. } => 0xe8b8c4421046aedd, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I32TruncSatF64U { input, .. } => 0x91c87015a56a944d, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I64TruncSatF32S { input, .. } => 0xb909e169382afddd, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I64TruncSatF32U { input, .. } => 0xc6f884d2705bf2d3, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::I64TruncSatF64S { input, .. } => 0xa5e8386963664fa3, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
-                Instr::I64TruncSatF64U { input, .. } => 0xa43800f9e4975aff, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
+                Instr::I32TruncF32S { input, .. } =>
+                {
+                    self.get_register(input).to_bits() ^ 0xa8edf1813c31175b
+                }
+                Instr::I32TruncF32U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xf980305a8ba3be0f
+                }
+                Instr::I32TruncF64S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xb982c8f45dcd5731
+                }
+                Instr::I32TruncF64U { input, .. } =>
+                {
+                    self.get_register(input).to_bits() ^ 0x9ca1670d1e934f45 
+                }
+                Instr::I64TruncF32S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xeb2506c7a7cfe6f7 
+                }
+                Instr::I64TruncF32U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xa230e0381f36668d
+                }
+                Instr::I64TruncF64S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xce02765ab94df325
+                }
+                Instr::I64TruncF64U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xb39253799e21a72d
+                }
+                Instr::I32TruncSatF32S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xa164fb50eec581d3
+                }
+                Instr::I32TruncSatF32U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xabac89637bdb1d8f
+                }
+                Instr::I32TruncSatF64S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xe8b8c4421046aedd 
+                }
+                Instr::I32TruncSatF64U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0x91c87015a56a944d
+                }
+                Instr::I64TruncSatF32S { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xb909e169382afddd
+                }
+                Instr::I64TruncSatF32U { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xc6f884d2705bf2d3
+                }
+                Instr::I64TruncSatF64S { input, .. } =>
+                {
+                    self.get_register(input).to_bits() ^ 0xa5e8386963664fa3
+                }
+                Instr::I64TruncSatF64U { input, .. } =>
+                {
+                    self.get_register(input).to_bits() ^ 0xa43800f9e4975aff
+                } 
                 Instr::I32Extend8S { input, .. } => {
                     self.get_register(input).to_bits() ^ 0xdecfc0dc5cb809af
                 }
@@ -729,8 +932,14 @@ impl<'engine> Executor<'engine> {
                 Instr::I64Extend32S { input, .. } => {
                     self.get_register(input).to_bits() ^ 0xb61b2de5652d06e9
                 }
-                Instr::F32DemoteF64 { input, .. } => 0xbf82e5dd4495233b, // FIXME self.get_register(input).f32_convert_i64_s().to_bits()
-                Instr::F64PromoteF32 { input, .. } => 0xf42a79d7ed7c17c3, // FIXME self.get_register(input).f64_convert_i64_s().to_bits()
+                Instr::F32DemoteF64 { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xbf82e5dd4495233b
+                }
+                Instr::F64PromoteF32 { input, .. } => 
+                {
+                    self.get_register(input).to_bits() ^ 0xf42a79d7ed7c17c
+                }
                 Instr::F32ConvertI32S { input, .. } => {
                     self.get_register(input).to_bits() ^ 0x9e65030287165e29
                 }
@@ -757,7 +966,9 @@ impl<'engine> Executor<'engine> {
                 }
                 _ => 0xf360371a61b48ca1,
             };
+
             store.inner.update_runtime_signature(instr_prime);
+
             match instr {
                 Instr::Trap { trap_code } => self.execute_trap(trap_code)?,
                 Instr::ConsumeFuel { block_fuel } => {
